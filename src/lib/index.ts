@@ -1,5 +1,6 @@
 export { prepareArtifactRun } from './artifacts.js'
+export type { AppErrorCode, ErrorCode, LaunchErrorCode } from './error-codes.js'
 export { getWsUrl } from './get-ws-url.js'
-export { launchElectron } from './launch-electron.js'
-export { connectAndPick } from './playwright-driver.js'
+export { LaunchError, launchElectron } from './launch-electron.js'
+export { AppError, connectAndPick } from './playwright-driver.js'
 export * from './types.js'

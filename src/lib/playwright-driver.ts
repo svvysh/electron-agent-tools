@@ -9,14 +9,14 @@ import {
   type Request,
   type Response,
 } from 'playwright'
-
+import type { AppErrorCode } from './error-codes.js'
 import type { ConnectOptions, ConsoleEvent, Driver, NetworkHarvest, Selector } from './types.js'
 
-class AppError extends Error {
-  code: string
+export class AppError extends Error {
+  code: AppErrorCode
   details?: Record<string, unknown> | undefined
 
-  constructor(code: string, message: string, details?: Record<string, unknown>) {
+  constructor(code: AppErrorCode, message: string, details?: Record<string, unknown>) {
     super(message)
     this.code = code
     this.details = details
@@ -353,14 +353,41 @@ class PlaywrightDriver implements Driver {
     }
 
     const contexts = this.#browser.contexts()
-    const waiters = contexts.map((ctx) => ctx.waitForEvent('page', { timeout: timeoutMs }))
+    const waiters = contexts.map((ctx) => {
+      let cancelled = false
+      const promise = ctx
+        .waitForEvent('page', { timeout: timeoutMs })
+        .then((page) => (cancelled ? null : page))
+        .catch((error) => {
+          if (cancelled) return null
+          throw error
+        })
+
+      return {
+        promise,
+        cancel: () => {
+          cancelled = true
+        },
+      }
+    })
 
     try {
-      const newPage = await Promise.race(waiters)
+      const newPage = await Promise.race(waiters.map((waiter) => waiter.promise))
+      // Cancel losers so their eventual timeouts resolve quietly instead of rejecting unhandled.
+      waiters.forEach((waiter) => {
+        waiter.cancel()
+      })
+
+      if (!newPage) {
+        throw new AppError('E_WAIT_TIMEOUT', 'No matching window appeared in time')
+      }
       const { title, url } = await scorePage(newPage, pick)
       this.#setPage(newPage)
       return { url, title }
     } catch (error) {
+      waiters.forEach((waiter) => {
+        waiter.cancel()
+      })
       throw new AppError('E_WAIT_TIMEOUT', 'No matching window appeared in time', { error })
     }
   }
@@ -393,6 +420,10 @@ class PlaywrightDriver implements Driver {
   }
 
   async close(): Promise<void> {
+    // For CDP attachments, `browser.close()` **only** closes the client connection; it does not
+    // shut down the remote Electron instance. Using private connection handles left the event loop
+    // hanging, so stick with the public API here.
+    this.#unwireEvents(this.#page)
     await this.#browser.close()
   }
 }

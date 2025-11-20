@@ -7,27 +7,48 @@ import { buildLocator, connectAndPick } from '../lib/playwright-driver.js'
 import type { ArtifactOptions, Selector } from '../lib/types.js'
 
 type JsonInput = Record<string, unknown>
+type ParseResult =
+  | { ok: true; sub: string; payload: JsonInput }
+  | {
+      ok: false
+      error: {
+        code: 'E_BAD_JSON'
+        message: string
+        details: { rawArg: string; parseError: string }
+      }
+    }
 
 const printJson = (payload: unknown) => {
   process.stdout.write(`${JSON.stringify(payload)}\n`)
 }
 
 const fail = (code: string, message: string, details?: Record<string, unknown>) => {
+  process.exitCode = 1
   printJson({ ok: false, error: { message, code, details } })
 }
 
-const parseArg = (): { sub: string; payload: JsonInput } => {
+const parseArg = (): ParseResult => {
   const sub = process.argv[2] ?? ''
   const raw = process.argv[3] ?? process.argv[2] ?? ''
   let payload: JsonInput = {}
   if (raw) {
     try {
       payload = JSON.parse(raw)
-    } catch {
-      payload = {}
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: 'E_BAD_JSON',
+          message: 'Invalid JSON input',
+          details: {
+            rawArg: raw,
+            parseError: error instanceof Error ? error.message : String(error),
+          },
+        },
+      }
     }
   }
-  return { sub, payload }
+  return { ok: true, sub, payload }
 }
 
 const defaultTimeout = 10_000
@@ -64,7 +85,13 @@ const listWindows = async (wsUrl: string) => {
 }
 
 const run = async () => {
-  const { sub, payload } = parseArg()
+  const parsed = parseArg()
+  if (!parsed.ok) {
+    printJson(parsed)
+    process.exitCode = 1
+    return
+  }
+  const { sub, payload } = parsed
   const wsUrl = typeof payload.wsUrl === 'string' ? payload.wsUrl : ''
   const timeoutMs =
     typeof payload.timeoutMs === 'number' && payload.timeoutMs > 0

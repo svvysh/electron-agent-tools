@@ -1,18 +1,19 @@
 import { execFile, spawn } from 'node:child_process'
-import { openSync } from 'node:fs'
+import { closeSync, openSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import * as path from 'node:path'
 
 import { prepareArtifactRun } from './artifacts.js'
+import type { LaunchErrorCode } from './error-codes.js'
 import { getWsUrl } from './get-ws-url.js'
 import type { LaunchOptions, LaunchResult } from './types.js'
 
-class LaunchError extends Error {
-  code: string
+export class LaunchError extends Error {
+  code: LaunchErrorCode
   details?: Record<string, unknown> | undefined
 
-  constructor(code: string, message: string, details?: Record<string, unknown>) {
+  constructor(code: LaunchErrorCode, message: string, details?: Record<string, unknown>) {
     super(message)
     this.code = code
     this.details = details
@@ -21,35 +22,42 @@ class LaunchError extends Error {
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-type PsRow = { pid: number; ppid: number; cmd: string }
+type PsRow = { pid: number; ppid: number; cmd: string; depth: number }
 
 const listChildren = async (pid: number): Promise<PsRow[]> =>
   new Promise((resolve) => {
-    execFile('ps', ['-eo', 'pid=', '-o', 'ppid=', '-o', 'comm='], (err, stdout) => {
+    execFile('ps', ['-eo', 'pid=', '-o', 'ppid=', '-o', 'command='], (err, stdout) => {
       if (err || !stdout) return resolve([])
       const rows = stdout
         .trim()
         .split(/\n+/)
-        .map((line) => line.trim().split(/\s+/, 3))
-        .map(([pidStr = '0', ppidStr = '0', ...rest]) => ({
-          pid: Number.parseInt(pidStr, 10),
-          ppid: Number.parseInt(ppidStr, 10),
-          cmd: rest.join(' '),
-        }))
-        .filter((row) => Number.isFinite(row.pid) && Number.isFinite(row.ppid)) as PsRow[]
+        .map((line) => {
+          const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)
+          if (!match) return null
+          const pidStr = match[1] ?? '0'
+          const ppidStr = match[2] ?? '0'
+          const cmd = match[3] ?? ''
+          return {
+            pid: Number.parseInt(pidStr, 10),
+            ppid: Number.parseInt(ppidStr, 10),
+            cmd,
+          }
+        })
+        .filter((row): row is { pid: number; ppid: number; cmd: string } => Boolean(row))
+        .filter((row) => Number.isFinite(row.pid) && Number.isFinite(row.ppid))
 
       const children: PsRow[] = []
-      const visit = (parent: number) => {
+      const visit = (parent: number, depth: number) => {
         rows
           .filter((row) => row.ppid === parent)
           .forEach((row) => {
             if (!children.some((c) => c.pid === row.pid)) {
-              children.push(row)
-              visit(row.pid)
+              children.push({ ...row, depth })
+              visit(row.pid, depth + 1)
             }
           })
       }
-      visit(pid)
+      visit(pid, 1)
       resolve(children)
     })
   })
@@ -94,6 +102,36 @@ export const terminateTree = async (
     logger,
   }: { timeoutMs?: number; logger?: (msg: string, meta?: unknown) => void } = {},
 ): Promise<boolean> => {
+  if (process.platform === 'win32') {
+    const taskkill = async (force: boolean): Promise<boolean> =>
+      new Promise((resolve) => {
+        const args = ['/PID', String(pid), '/T']
+        if (force) args.unshift('/F')
+        execFile('taskkill', args, (err) => resolve(!err))
+      })
+
+    const phases: { force: boolean; waitMs: number }[] = [
+      { force: false, waitMs: 400 },
+      { force: true, waitMs: 400 },
+    ]
+
+    for (const { force, waitMs } of phases) {
+      await taskkill(force)
+      await wait(waitMs)
+      if (!isAlive(pid)) return true
+      if (logger) logger('terminateTree still alive', { pid, force })
+    }
+
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (!isAlive(pid)) return true
+      await wait(100)
+    }
+
+    if (logger) logger('terminateTree timeout', { pid })
+    return !isAlive(pid)
+  }
+
   const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGKILL']
   for (const signal of signals) {
     try {
@@ -147,6 +185,18 @@ export const launchElectron = async (opts: LaunchOptions): Promise<LaunchResult>
   const stdoutFd = openSync(stdoutPath, 'a')
   const stderrFd = openSync(stderrPath, 'a')
 
+  let logsClosed = false
+  const closeLogs = () => {
+    if (logsClosed) return
+    logsClosed = true
+    try {
+      closeSync(stdoutFd)
+    } catch {}
+    try {
+      closeSync(stderrFd)
+    } catch {}
+  }
+
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     E2E: '1',
@@ -170,17 +220,82 @@ export const launchElectron = async (opts: LaunchOptions): Promise<LaunchResult>
     process.stderr.write(`DEBUG_LAUNCH start pid=${child.pid} cdpPort=${cdpPort}\n`)
   }
 
-  let spawnError: Error | null = null
-  child.once('error', (err) => {
-    spawnError = err as Error
+  let cdpReady = false
+  let removeEarlyListeners: (() => void) | undefined
+
+  const earlyFailurePromise = new Promise<never>((_, reject) => {
+    const onError = (err: Error) => {
+      if (cdpReady) return
+      removeEarlyListeners?.()
+      reject(
+        new LaunchError('E_SPAWN', 'Failed to spawn Electron', {
+          error: err,
+          stderrPath,
+        }),
+      )
+    }
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (cdpReady) return
+      removeEarlyListeners?.()
+      reject(
+        new LaunchError('E_EXIT_EARLY', 'Electron exited before CDP became ready', {
+          code,
+          signal,
+          stderrPath,
+        }),
+      )
+    }
+    removeEarlyListeners = () => {
+      child.off('error', onError)
+      child.off('exit', onExit)
+      child.off('close', onExit)
+    }
+    child.on('error', onError)
+    child.on('exit', onExit)
+    child.on('close', onExit)
   })
 
   const resolveElectronPid = async (rootPid: number): Promise<number> => {
     const descendants = await listChildren(rootPid)
-    const electronChild = descendants
-      .filter((row) => /Electron/i.test(row.cmd))
-      .sort((a, b) => b.pid - a.pid)[0]
-    return electronChild ? electronChild.pid : rootPid
+    if (!descendants.length) return rootPid
+
+    const launchedBasename = path.basename(opts.command ?? '').toLowerCase()
+    const isLikelyElectron = (cmd: string): { score: number; matched: boolean } => {
+      const lower = cmd.toLowerCase()
+      let score = 0
+
+      if (launchedBasename && lower.includes(launchedBasename)) {
+        score += 5
+      }
+
+      if (/[\\/](electron|electron\.app[\\/].+?macos[\\/](electron|electron helper))/i.test(cmd)) {
+        score += 4
+      }
+
+      if (/\belectron(?: helper)?(?: \([^)]+\))?\b/i.test(cmd)) {
+        score += 3
+      }
+
+      if (/\bchrome(?:ium)? helper\b/i.test(cmd)) {
+        score += 1
+      }
+
+      return { score, matched: score > 0 }
+    }
+
+    const ranked = descendants
+      .map((row) => {
+        const result = isLikelyElectron(row.cmd)
+        return { ...row, ...result }
+      })
+      .filter((row) => row.matched)
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score
+        if (a.depth !== b.depth) return a.depth - b.depth
+        return a.pid - b.pid
+      })
+
+    return ranked[0]?.pid ?? rootPid
   }
 
   let electronPidResolved: number | undefined
@@ -209,16 +324,17 @@ export const launchElectron = async (opts: LaunchOptions): Promise<LaunchResult>
         } catch {}
       }
     }
-    // best-effort stream cleanup
-    // nothing else to close; child stdio is fd-based
+    closeLogs()
   }
 
   try {
-    if (spawnError) {
-      throw new LaunchError('E_SPAWN', 'Failed to spawn Electron', { error: spawnError })
-    }
+    const wsUrl = await Promise.race([
+      getWsUrl({ port: cdpPort, timeoutMs: opts.timeoutMs ?? 40_000 }),
+      earlyFailurePromise,
+    ])
+    cdpReady = true
+    removeEarlyListeners?.()
 
-    const wsUrl = await getWsUrl({ port: cdpPort, timeoutMs: opts.timeoutMs ?? 40_000 })
     await wait(300)
     electronPidResolved = child.pid ? await resolveElectronPid(child.pid) : undefined
     const launchFile = path.join(artifactRun.dir, 'launch.json')
@@ -256,5 +372,7 @@ export const launchElectron = async (opts: LaunchOptions): Promise<LaunchResult>
     }
     if (error instanceof LaunchError) throw error
     throw new LaunchError('E_CDP_TIMEOUT', 'Timed out waiting for CDP', { error })
+  } finally {
+    closeLogs()
   }
 }

@@ -58,6 +58,12 @@ Failure:
 { "ok": false, "error": { "message": "...", "code": "E_CODE", "details": { ... } } }
 ```
 
+Invalid JSON input is rejected before dispatch with exit code 1:
+
+```json
+{ "ok": false, "error": { "code": "E_BAD_JSON", "message": "Invalid JSON input", "details": { "rawArg": "...", "parseError": "..." } } }
+```
+
 General options (per command): `timeoutMs` (default 10000 unless noted), `retries` (default 0), `wsUrl` when a CDP connection is needed. Artifact-producing commands accept `artifactDir` (default `.e2e-artifacts`) and `artifactPrefix` (default `<unix-ts>` directory name) to control where outputs land.
 
 ### 3.1 `browser-tools <subcommand>`
@@ -375,6 +381,7 @@ Update language to say **Playwright-based** tooling; note that the automation co
 ## 17) Error codes (normative)
 
 * `E_SPAWN`: failed to launch command.
+* `E_EXIT_EARLY`: Electron process ended before CDP became reachable (includes exit code/signal and stderr log path).
 * `E_CDP_TIMEOUT`: `/json/version` never exposed a WS URL within timeout.
 * `E_NO_PAGE`: no renderer page target matched.
 * `E_SELECTOR`: selector not found or not visible.
