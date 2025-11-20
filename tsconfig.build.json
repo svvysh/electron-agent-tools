@@ -5,6 +5,7 @@
   "exclude": ["src/**/*.spec.ts"],
   "compilerOptions": {
     "sourceMap": true,
-    "rootDir": "./src"
+    "rootDir": "./src",
+    "outDir": "./dist"
   }
 }

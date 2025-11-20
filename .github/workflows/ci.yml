@@ -7,31 +7,50 @@ on:
 
 jobs:
   build-test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v3
         with: { version: 10 }
 
-      - name: Use Node.js 24
+      - name: Use Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 22
           cache: 'pnpm'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      - name: Biome (lint + format check)
-        run: pnpm biome ci .
+      - name: Install Playwright chromium (linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright chromium (mac/windows)
+        if: "!startsWith(matrix.os, 'ubuntu')"
+        run: npx playwright install chromium
+
+      - name: Biome + typecheck
+        run: pnpm lint:check && pnpm typecheck
 
       - name: TypeScript build
         run: pnpm build
 
+      # - name: Run tests (examples, linux)
+      #   if: startsWith(matrix.os, 'ubuntu')
+      #   run: |
+      #     sudo apt-get update
+      #     sudo apt-get install -y xvfb
+      #     xvfb-run -a pnpm test
+
+      # - name: Run tests (examples, mac/windows)
+      #   if: "!startsWith(matrix.os, 'ubuntu')"
+      #   run: pnpm test
       - name: Run tests (examples)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb
-          xvfb-run -a pnpm test
+          pnpm test:ci

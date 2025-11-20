@@ -1,7 +1,7 @@
 {
   "name": "electron-agent-tools",
   "version": "0.1.0",
-  "description": "MCP-free, raw CDP tools to launch and drive Electron apps (CLI + tiny TS API).",
+  "description": "Playwright-based tools to launch and drive Electron apps (CLI + tiny TS API).",
   "type": "module",
   "license": "MIT",
   "authors": [
@@ -31,23 +31,29 @@
     "README.md"
   ],
   "bin": {
-    "launch-electron": "./dist/cli/launch-electron.js",
-    "browser-tools": "./dist/cli/browser-tools.js"
+    "browser-tools": "dist/cli/browser-tools.js",
+    "launch-electron": "dist/cli/launch-electron.js"
   },
   "scripts": {
+    "all": "pnpm format && pnpm lint && pnpm typecheck && pnpm build && pnpm generate:docs && pnpm test:ci",
     "build": "tsc -p tsconfig.build.json",
     "format": "biome format . --write",
     "lint": "biome lint . --write --unsafe",
     "lint:check": "biome ci .",
-    "test": "node --test **/*.spec.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "release:changeset": "changeset",
+    "release:version": "changeset version && pnpm install --no-frozen-lockfile",
+    "release:publish": "pnpm build && changeset publish",
+    "test": "node --test \"src/**/*.spec.mjs\"",
+    "test:ci": "CI=1 E2E_HEADLESS=1 pnpm test",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "generate:docs": "node scripts/generate-docs.mjs"
   },
   "dependencies": {
     "playwright": "^1.56.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.6",
-    "@types/electron": "^1.6.12",
+    "@changesets/cli": "^2.29.7",
     "@types/node": "^24.10.1",
     "electron": "^39.2.3",
     "typescript": "^5.9.3"

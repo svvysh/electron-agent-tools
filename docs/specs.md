@@ -8,7 +8,7 @@
   * Provide a **small registry of tools** (library APIs + CLI entrypoints) to launch, inspect, and drive an Electron app: click buttons, type, read DOM/HTML, capture screenshots, harvest console/network, optional test‑only IPC.
   * **Deterministic JSON I/O** for each CLI command; suitable for LLM orchestration.
   * Use **Playwright for everything** (locator engine, waits, screenshots, console/network listeners).
-  * **Headless/background OK**; GUI visibility not required (use Xvfb in CI on Linux).
+* **Headless/background OK**; GUI visibility not required (Electron launched with `--headless --disable-gpu` when `E2E_HEADLESS=1` or `headless: true`; fallback to Xvfb in CI on Linux if needed).
   * **Safety & cleanup** on failure/SIGINT; artifacts and logs collected.
 
 * **Non‑goals**
@@ -22,13 +22,13 @@
 * **OS**: macOS, Windows, Linux. CI targets Linux with **Xvfb**.
 * **Dependencies**:
   * runtime: `"playwright"` (use chromium).
-  * optional: `"tree-kill"` (or manual child cleanup).
 * **Dev dependencies**: `"typescript"`, `"@types/node"`, `"@biomejs/biome"`.
 
 ## 2) Launch & connection model
 
-* App is launched via a command (default `pnpm start:debug`), environment includes:
-  * `E2E=1`, `NODE_ENV=test`, `E2E_CDP_PORT=<port>`, `ELECTRON_ENABLE_LOGGING=1`.
+* Two paths:
+  * **Consumer-managed**: launch the Electron app (e.g., `pnpm exec electron ...`) with env `E2E=1`, `NODE_ENV=test`, `E2E_CDP_PORT=<port>`, `ELECTRON_ENABLE_LOGGING=1`, then call `getWsUrl` to discover `wsUrl`.
+* **Library helper**: `launchElectron(opts)` spawns the Electron command, picks/assigns a CDP port, polls for `wsUrl`, records stdout/stderr into artifacts, and returns `{ wsUrl, pid, electronPid?, quit }`; `quit()` gracefully ends the launched app. A CLI twin `launch-electron start|quit` is allowed.
 * App must enable CDP in **main**:
 
   ```ts
@@ -38,7 +38,7 @@
   }
   ```
 
-* Launcher polls `http://127.0.0.1:<port>/json/version` until it sees `webSocketDebuggerUrl`, then returns it.
+* Library helper `getWsUrl({ port, timeoutMs })` polls `http://127.0.0.1:<port>/json/version` until it sees `webSocketDebuggerUrl`, then returns it.
 * Driver connects to the **browser** WS endpoint via `chromium.connectOverCDP(wsUrl)`, enumerates **targets** (type `page`), and selects the main renderer:
   * Prefer URLs starting `app://`, `file://`, or `http://localhost:`; else match `pick.titleContains`/`pick.urlIncludes`.
 
@@ -58,26 +58,9 @@ Failure:
 { "ok": false, "error": { "message": "...", "code": "E_CODE", "details": { ... } } }
 ```
 
-General options (per command): `timeoutMs` (default 10000 unless noted), `retries` (default 0), `wsUrl` when a CDP connection is needed.
+General options (per command): `timeoutMs` (default 10000 unless noted), `retries` (default 0), `wsUrl` when a CDP connection is needed. Artifact-producing commands accept `artifactDir` (default `.e2e-artifacts`) and `artifactPrefix` (default `<unix-ts>` directory name) to control where outputs land.
 
-### 3.1 `launch-electron`
-
-* **Purpose**: start the app, wait for CDP, return PID and WS URL.
-* **Input**
-
-  ```json
-  { "port": 9223, "cwd": ".", "env": { }, "cmd": "pnpm start:debug", "timeoutMs": 40000 }
-  ```
-
-* **Output**
-
-  ```json
-  { "pid": 12345, "port": 9223, "wsUrl": "ws://127.0.0.1:9223/devtools/browser/...", "startedAt": "ISO", "logDir": ".e2e-artifacts/1700000000" }
-  ```
-
-* **Failure codes**: `E_SPAWN`, `E_CDP_TIMEOUT`, `E_PORT_IN_USE`.
-
-### 3.2 `browser-tools <subcommand>`
+### 3.1 `browser-tools <subcommand>`
 
 Single binary dispatching subcommands; each takes a single JSON arg.
 
@@ -94,13 +77,13 @@ Subcommands and inputs (implemented via Playwright `Page`):
 
   ```json
   {
-    "testIds": ["open-workspace-button", "..."],
-    "roles": [ { "role":"button","name":"Open workspace","selector":"button" } ],
-    "texts": [ { "text":"Open workspace","selector":"button" } ]
+    "testIds": ["click-button", "..."],
+    "roles": [ { "role":"button","name":"click button","selector":"button" } ],
+    "texts": [ { "text":"click button","selector":"button" } ]
   }
   ```
 
-* **`wait-text`** → `{ "wsUrl":"…", "text":"Open workspace", "timeoutMs":20000 }`  
+* **`wait-text`** → `{ "wsUrl":"…", "text":"click button", "timeoutMs":20000 }`  
   **Output**: `{ "visible": true }` (Use `page.getByText(text).waitFor({ state: 'visible' })`.)
 
 * **`click`** → selector schema (below)  
@@ -109,10 +92,22 @@ Subcommands and inputs (implemented via Playwright `Page`):
 * **`type`** → selector + `{ "value":"foo", "clearFirst":true }`  
   **Output**: `{ "typed": true }`
 
+* **`press`** → `{ "wsUrl":"…", "key":"Enter", ...Selector? }`  
+  **Output**: `{ "pressed": "Enter" }` (Presses globally or on the selector.)
+
+* **`hover`** → selector schema  
+  **Output**: `{ "hovered": true }`
+
+* **`scroll-into-view`** → selector schema  
+  **Output**: `{ "scrolled": true }`
+
+* **`upload`** → selector + `{ "filePath":"/abs/path" }`  
+  **Output**: `{ "uploaded": "/abs/path" }`
+
 * **`get-dom`** → selector + `{ "as":"innerHTML"|"textContent" }`  
   **Output**: `{ "value": "…" }`
 
-* **`screenshot`** → `{ "wsUrl":"…", "path":".e2e-artifacts/page.png", "fullPage": true }`  
+* **`screenshot`** → `{ "wsUrl":"…", "path":”.e2e-artifacts/page.png", "fullPage": true }`  
   **Output**: `{ "path":"…" }`
 
 * **`console-harvest`** → `{ "wsUrl":"…" }`  
@@ -121,13 +116,23 @@ Subcommands and inputs (implemented via Playwright `Page`):
 * **`network-harvest`** → `{ "wsUrl":"…" }`  
   **Output**: `{ "failed":[urls], "errorResponses":[ { "url","status" } ] }`
 
-* **`ipc-call`** (optional; test‑only) → `{ "wsUrl":"…", "channel":"app:quit", "args":{} }`  
-  **Output**: `{ "result": any }`  
-  Guards: only when `NODE_ENV=test`.
+* **`wait-for-window`** → `{ "wsUrl":"…", "pick": { "titleContains"?, "urlIncludes"? }, "timeoutMs"? }`  
+  **Output**: `{ "url","title" }` (returns once a matching window exists or appears.)
 
-* **`quit`** → `{ "wsUrl":"…", "forceAfterMs":5000 }`  
-  **Output**: `{ "exited": true, "code": 0 }`  
-  Attempts IPC quit; falls back to SIGINT/kill.
+* **`switch-window`** → `{ "wsUrl":"…", "pick": { ... } }`  
+  **Output**: `{ "url","title" }` (switches the active page for subsequent actions in that command.)
+
+### 3.2 `launch-electron` (CLI helper)
+
+* **`start|launch`** → `{ "command":"pnpm", "args":["exec","electron","fixtures/main.js"], "headless"?:true, "cdpPort"?, "artifactDir"?, "artifactPrefix"? }`  
+  **Output**: `{ "wsUrl", "pid", "electronPid", "cdpPort", "artifactDir", "launchFile", "quitHint": { "pid","launchFile" } }` (`electronPid` points to the real Electron binary; use it for quits.)
+
+### 3.4 CI shortcut
+
+* `pnpm test:ci` → Sets `CI=1 E2E_HEADLESS=1` and runs the Node test suite (`pnpm test`). Suitable for GitHub Actions; no visible window.
+* **`quit`** → `{ "pid":1234 }` or `{ "launchFile":".../launch.json" }`  
+  **Output**: `{ "quit": true, "pid": 1234 }`
+
 
 ### 3.3 Selector schema (used by `click`, `type`, `get-dom`)
 
@@ -157,6 +162,8 @@ Use `locator.nth(nth ?? 0)` and rely on Playwright’s visibility/auto‑wait se
 // src/lib/types.ts
 export type ConnectOptions = { wsUrl: string; pick?: { titleContains?: string; urlIncludes?: string } };
 
+export type ArtifactOptions = { artifactDir?: string; artifactPrefix?: string };
+
 export type Selector = {
   testid?: string;
   role?: { role: string; name?: string };
@@ -169,9 +176,31 @@ export type Selector = {
 export type ConsoleEvent = { type: string; text: string; ts: number };
 export type NetworkHarvest = { failed: string[]; errorResponses: { url: string; status: number }[] };
 
+export type LaunchOptions = {
+  command: string;
+  args?: string[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  cdpPort?: number;
+  timeoutMs?: number;
+} & ArtifactOptions;
+
+export type LaunchResult = {
+  wsUrl: string;
+  cdpPort: number;
+  pid: number;
+  artifactDir: string;
+  launchFile?: string;
+  quit: () => Promise<void>;
+};
+
 export interface Driver {
   click(sel: Selector): Promise<void>;
   type(sel: Selector & { value: string; clearFirst?: boolean }): Promise<void>;
+  press(key: string, sel?: Selector): Promise<void>;
+  hover(sel: Selector): Promise<void>;
+  scrollIntoView(sel: Selector): Promise<void>;
+  upload(sel: Selector, filePath: string): Promise<void>;
   waitText(text: string, timeoutMs?: number): Promise<void>;
   screenshot(path: string, fullPage?: boolean): Promise<void>;
   dumpOuterHTML(truncateAt?: number): Promise<string>;
@@ -180,6 +209,8 @@ export interface Driver {
     roles: { role: string; name: string | null; selector: string }[];
     texts: { text: string; selector: string }[];
   }>;
+  waitForWindow(timeoutMs?: number, pick?: ConnectOptions['pick']): Promise<{ url: string; title: string }>;
+  switchWindow(pick: ConnectOptions['pick']): Promise<{ url: string; title: string }>;
   flushConsole(): Promise<ConsoleEvent[]>;
   flushNetwork(): Promise<NetworkHarvest>;
   close(): Promise<void>;
@@ -187,6 +218,9 @@ export interface Driver {
 
 // src/lib/playwright-driver.ts
 export async function connectAndPick(opts: ConnectOptions): Promise<Driver>;
+
+// src/lib/launch-electron.ts
+export async function launchElectron(opts: LaunchOptions): Promise<LaunchResult>;
 ```
 
 ### 4.1 Playwright details (mandatory)
@@ -201,25 +235,23 @@ export async function connectAndPick(opts: ConnectOptions): Promise<Driver>;
   * `screenshot`: `page.screenshot({ path, fullPage })`.
   * `dumpOuterHTML`: `page.evaluate(() => document.documentElement.outerHTML)`.
   * `listSelectors`: evaluate in page to gather data-testid / role / text hints (same shape as before).
-* Console capture: `page.on('console', ...)` and `page.on('pageerror', ...)` push into an array for `flushConsole`.
-* Network capture: `page.on('requestfailed', …)` and `page.on('response', …)` (status ≥ 400) to fill `NetworkHarvest`.
+* Console capture: `page.on('console', ...)` and `page.on('pageerror', ...)` push into an array for `flushConsole`. Events emitted **before** the driver connects are not retroactively captured.
+* Network capture: `page.on('requestfailed', …)` and `page.on('response', …)` (status ≥ 400) to fill `NetworkHarvest`; requests that finish before the driver attaches will not appear.
 
 ## 5) Optional test‑only IPC shims
 
-Unchanged from prior spec; preload/main test shims stay the same and are gated by `NODE_ENV=test` with channel `app:quit`.
 
 ## 6) Safety, timeouts, retries, cleanup
 
 * Every command accepts `timeoutMs`; default 10s (launch: 40s).
 * Retries for click/type: default 0; on retry, re‑resolve locator.
-* **Artifacts** directory: `.e2e-artifacts/<timestamp>/`. Store:
-  * Electron stdout/stderr (`launch-electron`)
+* **Artifacts** directory: configurable with `artifactDir` (default `.e2e-artifacts`) and `artifactPrefix` (default `<timestamp>`). Each run lives under `<artifactDir>/<artifactPrefix>/` plus a `last-run` symlink pointing to the most recent run _per dir_. Store:
+  * Electron stdout/stderr (`launch-electron` helper) as `electron.stdout.log` / `electron.stderr.log`
   * `screenshot` outputs
   * `dom-snapshot` outputs (when requested)
   * harvested `console-harvest.json`, `network-harvest.json`
 * **Shutdown** policy:
-  * Preferred: `ipc-call app:quit` (if enabled).
-  * Else: SIGINT child; after `forceAfterMs`, SIGKILL (tree‑kill on Windows).
+  * Consumer-owned: start and stop the app in your harness. The library/CLI do not manage process lifetime unless you opt into `launchElectron` / `launch-electron quit`.
 * **Security**: CDP bound to `127.0.0.1`; enabled only when `E2E_CDP_PORT` is present; never ship enabled in production builds.
 
 ## 7) Repo layout
@@ -227,22 +259,19 @@ Unchanged from prior spec; preload/main test shims stay the same and are gated b
 ```
 .
 ├─ src/
-│  ├─ cli/launch-electron.ts
 │  ├─ cli/browser-tools.ts        # dispatches subcommands
+│  ├─ cli/launch-electron.ts      # optional launch/quit helper (JSON I/O)
+│  ├─ cli/browser-tools.spec.mjs  # drives CLI against the fixture app
 │  ├─ lib/playwright-driver.ts
-│  ├─ lib/types.ts
-│  ├─ preload.test.ts             # optional
-│  └─ main.test.ts                # optional
+│  └─ lib/types.ts
 ├─ examples/
 │  ├─ smoke.mjs                   # API example
 │  ├─ smoke.sh                    # CLI example (jq)
 │  └─ dom-dump.mjs
-├─ fixtures/mini-app/             # minimal Electron app for CI tests
-│  ├─ package.json
-│  ├─ main.ts
+├─ fixtures/                      # minimal Electron app for CI tests
+│  ├─ main.js
+│  ├─ preload.js
 │  └─ index.html
-├─ tests/
-│  └─ examples.test.mjs           # runs the examples against the fixture app
 ├─ .github/workflows/
 │  ├─ ci.yml
 │  └─ release.yml
@@ -254,15 +283,20 @@ Unchanged from prior spec; preload/main test shims stay the same and are gated b
 
 ## 8) Examples (shipped)
 
-Same behaviors as before, but implemented with Playwright APIs.
+Same behaviors as before, but implemented with Playwright APIs. Examples launch the fixture themselves (e.g., `pnpm exec electron fixtures/main.js`) and use `getWsUrl` to obtain `wsUrl` before driving the app.
 
 ## 9) Fixture app for CI
 
-Same minimal Electron app as before; unchanged.
+Electron app under `fixtures` launched via `pnpm exec electron fixtures/main.js` (no separate package.json). It exposes:
+* `click-button` (changes H1 to "Select a folder" and seeds text input).
+* `hover-target` → sets `hover-output` text to `hovered` on mouseenter.
+* `file-input` → echoes selected file name to `file-output`.
+* A long page with `far-target` + `scroll-status` that flips to `scrolled` when the page scrolls.
+* `open-window` button that opens `second.html` (titled "Second Window") for window helper tests.
 
 ## 10) Tests (run examples)
 
-Same flow: install fixture deps, run `examples/smoke.mjs`, assert `.e2e-artifacts/smoke.png` exists. Examples may accept `LAUNCH_JSON` to skip launching inside the example.
+Same flow: install fixture deps, run `examples/smoke.js`, assert `.e2e-artifacts/smoke.png` exists. Examples may accept `LAUNCH_JSON` to skip launching inside the example.
 
 ## 11) CI (lint/format/build/test) — `.github/workflows/ci.yml`
 
@@ -270,7 +304,16 @@ Identical structure; ensure Playwright runtime deps available (Ubuntu: `npx play
 
 ## 12) Release to npm — `.github/workflows/release.yml`
 
-Unchanged: tag `v*.*.*` triggers publish with provenance using `NPM_TOKEN`.
+Uses **Changesets** automation on pushes to `main`:
+
+- `changesets/action@v1` runs `pnpm version-packages` to bump versions and open a release PR (`commit: "chore: version packages"`, `title: "chore: release"`).
+- When the PR is merged (or a manual publish is needed), it runs `pnpm release` (`pnpm build && pnpm changeset publish`) with npm provenance.
+- Requires `NPM_TOKEN`; uses `GITHUB_TOKEN` for PR creation. Node 22 + pnpm 10 with cache enabled.
+- `.changeset/config.json` is initialized with `baseBranch: "main"` and `access: "public"` so published packages are public by default.
+- Local commands:
+  - `pnpm changeset add` to record change entries (select bump + write summary).
+  - `pnpm version-packages` to apply pending changesets and refresh the lockfile.
+  - `pnpm release` to build and publish (respects npm provenance).
 
 ## 13) `package.json` (library)
 
@@ -300,7 +343,10 @@ Update dependencies to use Playwright:
     "lint": "biome lint .",
     "format": "biome format --write .",
     "check": "biome ci . && tsc -p tsconfig.json --noEmit",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test **/*.spec.js",
+    "changeset": "changeset",
+    "version-packages": "pnpm changeset version && pnpm install --no-frozen-lockfile",
+    "release": "pnpm build && pnpm changeset publish"
   },
   "dependencies": {
     "playwright": "^<latest version>"

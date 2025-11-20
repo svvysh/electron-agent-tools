@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mini App</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        padding: 2rem;
+      }
+      button {
+        padding: 0.6rem 1.2rem;
+        font-size: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1 id="title">click button</h1>
+    <button data-testid="click-button" id="open-btn" type="button">click button</button>
+    <input data-testid="name-input" id="name-input" type="text" placeholder="Enter name" />
+
+    <button data-testid="hover-target" id="hover-target" type="button">hover me</button>
+    <div data-testid="hover-output" id="hover-output">not hovered</div>
+
+    <button data-testid="open-window" id="open-window" type="button">open window</button>
+
+    <input data-testid="file-input" id="file-input" type="file" />
+    <div data-testid="file-output" id="file-output">no file</div>
+
+    <div style="height: 1400px"></div>
+    <button data-testid="far-target" id="far-target" type="button">far target</button>
+    <div id="scroll-status" data-testid="scroll-status">not-scrolled</div>
+    <div id="press-output" data-testid="press-output">not-pressed</div>
+
+    <script type="module">
+      console.log('fixture-loaded');
+
+      const title = document.getElementById('title');
+      const button = document.getElementById('open-btn');
+      const input = document.getElementById('name-input');
+      const hoverTarget = document.getElementById('hover-target');
+      const hoverOutput = document.getElementById('hover-output');
+      const fileInput = document.getElementById('file-input');
+      const fileOutput = document.getElementById('file-output');
+      const scrollStatus = document.getElementById('scroll-status');
+      const openWindowButton = document.getElementById('open-window');
+      const pressOutput = document.getElementById('press-output');
+      button?.addEventListener('click', () => {
+        if (title) {
+          title.textContent = 'Select a folder';
+        }
+        if (input) {
+          input.value = 'clicked';
+        }
+      });
+
+      hoverTarget?.addEventListener('mouseenter', () => {
+        if (hoverOutput) hoverOutput.textContent = 'hovered';
+      });
+
+      fileInput?.addEventListener('change', (event) => {
+        const target = event.target;
+        const file = target?.files?.[0];
+        if (fileOutput) fileOutput.textContent = file ? file.name : 'no file';
+      });
+
+      window.addEventListener('scroll', () => {
+        if (scrollStatus) scrollStatus.textContent = 'scrolled';
+      });
+
+      openWindowButton?.addEventListener('click', () => {
+        window.open('second.html', 'second-window');
+      });
+
+      input?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && pressOutput) {
+          pressOutput.textContent = 'pressed enter';
+        }
+      });
+    </script>
+  </body>
+</html>
