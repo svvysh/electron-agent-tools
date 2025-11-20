@@ -4,4 +4,4 @@
 
 ### Patch Changes
 
-- d4d00cf: First version.
+- 8a32dc7: Initial release.
