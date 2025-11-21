@@ -1,0 +1,586 @@
+=== README caption ===
+Playwright-powered CLI and TypeScript helpers to launch, attach to, and drive Electron apps over CDP. Built for scripting, CI, and LLM agents with JSON-in/JSON-out commands.
+
+=== README: What you get ===
+
+=== docs/api.md ===
+# Electron Agent Tools API
+
+Reference for everything the package exposes: the TypeScript library _and_ the JSON-only CLIs. Paths are repo-relative; when installed from npm use the published binaries (e.g., `npm exec browser-tools -- …`).
+
+## Library (TypeScript / ESM)
+
+Import surface (`src/index.ts`):
+
+```ts
+import { getWsUrl, connectAndPick, launchElectron, AppError, LaunchError } from 'electron-agent-tools'
+import type {
+  ConnectOptions,
+  Selector,
+  Driver,
+  ConsoleEvent,
+  NetworkHarvest,
+  WsOptions,
+  LaunchOptions,
+  LaunchResult,
+  ArtifactOptions,
+  AppErrorCode,
+  LaunchErrorCode,
+  ErrorCode,
+} from 'electron-agent-tools'
+```
+
+### `getWsUrl({ port, timeoutMs? }: WsOptions): Promise<string>`
+- Polls `http://127.0.0.1:<port>/json/version` until `webSocketDebuggerUrl` is available.
+- Each poll request is aborted after ~1.5s so half-open ports can't stall the loop; overall timeout still applies.
+- `timeoutMs` default: 30_000; rejects with an Error containing `details` on timeout.
+
+### `launchElectron(opts: LaunchOptions): Promise<LaunchResult>`
+- Spawns the Electron command, chooses/provides `cdpPort`, and waits for `wsUrl` before resolving.
+- Captures stdout/stderr to `<artifactDir>/<artifactPrefix>/electron.stdout.log|electron.stderr.log`.
+- Closes the log file descriptors when shutting down to avoid FD leaks across runs.
+- Returns `{ wsUrl, pid, cdpPort, artifactDir, launchFile?, quit }`; `quit()` terminates the spawned tree (POSIX: SIGINT/SIGTERM/SIGKILL to the process group; Windows: `taskkill /T`).
+- Accepts `artifactDir` / `artifactPrefix` to align artifacts with CLI defaults.
+- If the Electron process errors or exits before CDP becomes reachable, the promise now rejects immediately (no 30–40s poll wait) with `LaunchError` code `E_SPAWN` (spawn error) or `E_EXIT_EARLY` (exit/close), including the exit `code`/`signal` and `stderrPath` in `details`.
+
+### `connectAndPick(opts: ConnectOptions): Promise<Driver>`
+- Uses `chromium.connectOverCDP` to attach to an already‑running Electron renderer.
+- `ConnectOptions`:
+  - `wsUrl` (string, required) — CDP websocket debugger URL (e.g. from `getWsUrl`).
+  - `pick?: { titleContains?: string; urlIncludes?: string }` — optional scoring hints when multiple pages exist; scores also prefer `app://`, `file://`, and localhost origins.
+- Returns a `Driver` (below). The underlying Playwright `Page` is exposed as `driver.page` (optional).
+
+### `Driver` methods
+- `click(sel: Selector): Promise<void>` — Clicks the first match. Respects `timeoutMs` on the selector; throws `E_SELECTOR` on failure.
+- `type(sel: Selector & { value: string; clearFirst?: boolean }): Promise<void>` — Optionally clears, then fills. Honors `timeoutMs`.
+- `press(key: string, sel?: Selector): Promise<void>` — Press a key globally or scoped to a locator.
+- `hover(sel: Selector): Promise<void>` — Moves pointer to selector.
+- `scrollIntoView(sel: Selector): Promise<void>` — Calls `scrollIntoView` on the element.
+- `upload(sel: Selector, filePath: string): Promise<void>` — Uses `setInputFiles` on the locator.
+- `waitText(text: string, timeoutMs = 10_000): Promise<void>` — Waits for visible text (substring match) or throws `E_WAIT_TIMEOUT`.
+- `screenshot(path: string, fullPage = true): Promise<void>` — Ensures parent dirs exist, then writes PNG.
+- `dumpOuterHTML(truncateAt?: number): Promise<string>` — Returns document.outerHTML, optionally truncated.
+- `listSelectors(max = 200): Promise<{ testIds; roles; texts; }>` — Gathers top selectors from the document for quick discovery.
+- `waitForWindow(timeoutMs?: number, pick?: ConnectOptions['pick']): Promise<{ url; title }>` — Waits for an existing or newly opened window matching hints and rewires listeners to that page. Safe to call while multiple contexts exist; background timeouts are cancelled so no unhandled rejections leak.
+- `switchWindow(pick: ConnectOptions['pick']): Promise<{ url; title }>` — Chooses a window by `titleContains` / `urlIncludes` hints.
+- `flushConsole(): Promise<ConsoleEvent[]>` — Returns and clears buffered console/pageerror events.
+- `flushNetwork(): Promise<NetworkHarvest>` — Returns and clears buffered failed requests and 4xx/5xx responses.
+- `close(): Promise<void>` — Disconnects from the CDP session (leaves the Electron app running).
+
+### `Selector` shape
+- At least one of:
+  - `testid: string` (data-testid)
+  - `role: { role: string; name?: string }` (ARIA role; name can be string or regex compatible)
+  - `text: string` (substring text match)
+  - `css: string` (CSS selector)
+- Optionals: `nth?: number` (0‑based), `timeoutMs?: number`.
+
+### Event/harvest types
+- `ConsoleEvent`: `{ type: string; text: string; ts: number }` (`page.on('console')` + `pageerror`).
+- `NetworkHarvest`: `{ failed: string[]; errorResponses: { url: string; status: number }[] }`.
+
+### Notes
+- Selectors are resolved with Playwright locators in priority order: testid → role → text → css; then `nth` is applied.
+- Errors from driver methods are wrapped as `AppError` with a `code` (e.g., `E_SELECTOR`, `E_WAIT_TIMEOUT`, `E_FS`).
+- Console/network harvesting only records events after the driver connects; early app logs/requests may be missed if you attach late.
+
+## CLI: `browser-tools`
+
+Entry (npm install): `npm exec browser-tools -- <subcmd> '<json>'` (or `pnpm exec` / `yarn browser-tools`). All subcommands accept a single JSON argument; output is single-line JSON. On error: `{ ok: false, error: { code, message, details } }`. Invalid JSON now fails fast (exit code 1) with:
+
+```json
+{ "ok": false, "error": { "code": "E_BAD_JSON", "message": "Invalid JSON input", "details": { "rawArg": "{not json", "parseError": "Unexpected token n in JSON at position 1" } } }
+```
+
+Common input keys:
+- `wsUrl` (string, required for most) — CDP websocket URL.
+- `timeoutMs` — overrides default 10_000 for wait/click/type selectors.
+- Selectors follow the `Selector` shape above.
+- `artifactDir` / `artifactPrefix` (for artifact-producing commands: dom-snapshot, screenshot, console-harvest, network-harvest).
+
+Subcommands
+- `list-windows` — Input: `{ wsUrl }`. Output: `{ ok: true, data: { pages: [{ targetId, url, title }] } }`.
+- `dom-snapshot` — Input: `{ wsUrl, truncateAt? }`. Saves `.e2e-artifacts/<ts>/dom-snapshot.html`; Output includes `{ url, title, outerHTML }`.
+- `list-selectors` — Input: `{ wsUrl, max? }`. Output: same shape as driver `listSelectors`.
+- `wait-text` — Input: `{ wsUrl, text, timeoutMs? }`. Output: `{ ok: true, data: { visible: true } }`.
+- `click` — Input: `{ wsUrl, ...Selector }`. Output: `{ clicked: true }`.
+- `type` — Input: `{ wsUrl, value, clearFirst?, ...Selector }`. Output: `{ typed: true }`.
+- `press` — Input: `{ wsUrl, key, ...Selector? }`. Output: `{ pressed: "key" }`.
+- `hover` — Input: `{ wsUrl, ...Selector }`. Output: `{ hovered: true }`.
+- `scroll-into-view` — Input: `{ wsUrl, ...Selector }`. Output: `{ scrolled: true }`.
+- `upload` — Input: `{ wsUrl, filePath, ...Selector }`. Output: `{ uploaded: "filePath" }`.
+- `get-dom` — Input: `{ wsUrl, as: 'innerHTML' | 'textContent', ...Selector }`. Output: `{ value: string }`.
+- `screenshot` — Input: `{ wsUrl, path?, fullPage? }` (default path `.e2e-artifacts/<ts>/page.png`). Output: `{ path }`.
+- `console-harvest` — Input: `{ wsUrl }`. Writes `.e2e-artifacts/<ts>/console-harvest.json`; Output: `{ events }` (ConsoleEvent[]).
+- `network-harvest` — Input: `{ wsUrl }`. Writes `.e2e-artifacts/<ts>/network-harvest.json`; Output: `NetworkHarvest`.
+- `wait-for-window` — Input: `{ wsUrl, pick?, timeoutMs? }`. Output: `{ url, title }`.
+- `switch-window` — Input: `{ wsUrl, pick }`. Output: `{ url, title }`.
+
+### CLI: `launch-electron`
+- `start|launch` — Input: `{ command, args?, cwd?, env?, headless?, cdpPort?, artifactDir?, artifactPrefix? }`. Output: `{ wsUrl, pid, electronPid, cdpPort, artifactDir, launchFile, quitHint }` (electronPid is resolved by scanning descendant command lines for the launched Electron binary/helpers, with a fallback to the root pid).
+- `quit` — Input: `{ pid }` or `{ launchFile }`. Output: `{ quit: true, pid }`. Terminates the spawned process tree (POSIX via process-group signals; Windows via `taskkill /T`).
+- Both `launch-electron` commands share the same strict JSON parsing; malformed args return the `E_BAD_JSON` shape above and exit code 1.
+
+Artifacts
+- CLI writes under `<artifactDir>/<artifactPrefix>/` (defaults `.e2e-artifacts/<unix-ts>/`) with filenames: `dom-snapshot.html`, `console-harvest.json`, `network-harvest.json`, `page.png` (or custom path). A `last-run` symlink per dir points at the most recent run.
+
+## Usage Recipes
+
+- Discover a running app then drive it with the typed Driver:
+```ts
+const wsUrl = await getWsUrl({ port: 9451 })
+const driver = await connectAndPick({ wsUrl })
+await driver.waitText('Select a folder')
+await driver.click({ testid: 'pick-folder' })
+await driver.close()
+```
+
+`driver.close()` only detaches from the CDP session; the Electron process keeps running.
+
+- Drive via CLI (pure JSON, good for shell/LLM):
+```bash
+WS_URL=$(node -e "import { getWsUrl } from 'electron-agent-tools'; (async () => console.log(await getWsUrl({ port: 9451 })))();")
+npm exec browser-tools -- wait-text "{\"wsUrl\":\"$WS_URL\",\"text\":\"click button\"}"
+npm exec browser-tools -- click "{\"wsUrl\":\"$WS_URL\",\"testid\":\"click-button\"}"
+```
+  - Substitute `pnpm exec` / `yarn browser-tools` if you use those managers.
+
+## Error Conventions
+- `AppError` (exported): `code` is one of `E_SELECTOR`, `E_NO_PAGE`, `E_WAIT_TIMEOUT`, `E_FS`, `E_INTERNAL`.
+- `LaunchError` (exported): `code` is `E_SPAWN`, `E_EXIT_EARLY`, or `E_CDP_TIMEOUT`.
+- `ErrorCode` (exported type) is the union of all library codes for easy narrowing.
+- CLI always returns JSON; check `ok` boolean before consuming `data`.
+- Recommended handling pattern:
+
+```ts
+try {
+  await connectAndPick(...);
+} catch (err) {
+  if (err instanceof AppError || err instanceof LaunchError) {
+    switch (err.code as ErrorCode) {
+      case 'E_SELECTOR':
+        // retry with a different locator, etc.
+        break
+      case 'E_EXIT_EARLY':
+        // check stderrPath in err.details
+        break
+      default:
+        throw err // rethrow unknown codes
+    }
+  }
+  throw err
+}
+```
+
+=== examples/dom-dump.mjs ===
+import { spawn } from 'node:child_process'
+import { writeFile } from 'node:fs/promises'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { connectAndPick, getWsUrl } from '../dist/index.js'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+const launch = async () => {
+  const port = 9334
+  const child = spawn('pnpm', ['exec', 'electron', 'fixtures/main.js'], {
+    cwd: path.join(__dirname, '..'),
+    env: {
+      ...process.env,
+      E2E_CDP_PORT: String(port),
+      E2E: '1',
+      NODE_ENV: 'test',
+      ELECTRON_ENABLE_LOGGING: '1',
+    },
+    stdio: 'ignore',
+  })
+  const wsUrl = await getWsUrl({ port, timeoutMs: 40_000 })
+  return { child, wsUrl }
+}
+
+const main = async () => {
+  const launchInfo = await launch()
+
+  const driver = await connectAndPick({ wsUrl: launchInfo.wsUrl })
+  const outerHTML = await driver.dumpOuterHTML(250_000)
+  await writeFile('.e2e-artifacts/dom.html', outerHTML, 'utf-8')
+  await driver.close()
+
+  launchInfo.child.kill('SIGINT')
+}
+
+main()
+
+=== examples/smoke.mjs ===
+import { spawn } from 'node:child_process'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { connectAndPick, getWsUrl } from 'electron-agent-tools'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+const main = async () => {
+  const port = 9333
+  const electronBin = path.join(__dirname, '..', 'node_modules/.bin/electron')
+  const child = spawn(electronBin, [path.join(__dirname, '..', 'fixtures/main.js')], {
+    cwd: path.join(__dirname, '..'),
+    env: {
+      ...process.env,
+      E2E_CDP_PORT: String(port),
+      E2E: '1',
+      NODE_ENV: 'test',
+      ELECTRON_ENABLE_LOGGING: '1',
+    },
+    stdio: 'ignore',
+    detached: true,
+  })
+
+  // ensure child exits if parent exits
+  const cleanup = () => {
+    try {
+      process.kill(-child.pid, 'SIGINT')
+    } catch {
+      /* ignore */
+    }
+  }
+  process.on('exit', cleanup)
+  process.on('SIGINT', cleanup)
+
+  const wsUrl = await getWsUrl({ port, timeoutMs: 40_000 })
+  const driver = await connectAndPick({ wsUrl })
+
+  await driver.waitText('Open workspace', 20_000)
+  await driver.click({ testid: 'open-workspace-button' })
+  await driver.waitText('Select a folder', 20_000)
+  await driver.screenshot('.e2e-artifacts/smoke.png', true)
+
+  await driver.close()
+  cleanup()
+}
+
+main()
+
+=== examples/smoke.sh ===
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+PORT=9355
+E2E=1 NODE_ENV=test E2E_CDP_PORT=$PORT ELECTRON_ENABLE_LOGGING=1 pnpm exec electron fixtures/main.js &
+APP_PID=$!
+trap "kill $APP_PID 2>/dev/null || true" EXIT
+
+WS_URL=$(node --input-type=module - <<'NODE'
+import { getWsUrl } from './dist/index.js';
+const ws = await getWsUrl({ port: 9355, timeoutMs: 40000 });
+console.log(ws);
+NODE
+)
+
+node "$ROOT/dist/cli/browser-tools.js" wait-text \
+  "{\"wsUrl\":\"$WS_URL\",\"text\":\"click button\",\"timeoutMs\":20000}"
+
+node "$ROOT/dist/cli/browser-tools.js" click \
+  "{\"wsUrl\":\"$WS_URL\",\"testid\":\"click-button\"}"
+
+node "$ROOT/dist/cli/browser-tools.js" wait-text \
+  "{\"wsUrl\":\"$WS_URL\",\"text\":\"Select a folder\",\"timeoutMs\":20000}"
+
+node "$ROOT/dist/cli/browser-tools.js" screenshot \
+  "{\"wsUrl\":\"$WS_URL\",\"path\":\".e2e-artifacts/smoke.png\",\"fullPage\":true}"
+
+=== src/cli/browser-tools.spec.mjs ===
+import assert from 'node:assert'
+import { execFile } from 'node:child_process'
+import { access, mkdtemp, readdir, realpath, stat, writeFile } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { test } from 'node:test'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
+
+const execFileAsync = promisify(execFile)
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const root = path.join(__dirname, '..', '..')
+const electronBin = (() => {
+  if (process.platform === 'win32') {
+    const exePath = path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
+    return exePath
+  }
+  return path.join(root, 'node_modules/.bin/electron')
+})()
+const pnpmBin = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+
+let built = false
+const buildOnce = async () => {
+  if (built) return
+  await execFileAsync(pnpmBin, ['build'], {
+    cwd: root,
+    env: { ...process.env, NODE_ENV: 'test' },
+    shell: process.platform === 'win32', // Node 20+: .cmd requires shell on Windows
+  })
+  built = true
+}
+
+const run = async (cmd, args, opts = {}) =>
+  execFileAsync(cmd, args, {
+    cwd: root,
+    env: { ...process.env, NODE_ENV: 'test' },
+    ...opts,
+  })
+
+const findLatestArtifact = async (filename, dir = '.e2e-artifacts') => {
+  const artifactRoot = path.join(root, dir)
+  const entries = await readdir(artifactRoot).catch(() => [])
+  let latestPath = null
+  let latestMtime = 0
+  for (const entry of entries) {
+    const candidate = path.join(artifactRoot, entry, filename)
+    try {
+      const st = await stat(candidate)
+      if (st.isFile() && st.mtimeMs > latestMtime) {
+        latestMtime = st.mtimeMs
+        latestPath = candidate
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return latestPath
+}
+
+const runBrowserTool = (sub, payload) =>
+  run('node', [path.join(root, 'dist/cli/browser-tools.js'), sub, JSON.stringify(payload)]).then(
+    (res) => JSON.parse(res.stdout),
+  )
+
+const loadLib = () => import(pathToFileURL(path.join(root, 'dist/index.js')).href)
+
+test(
+  'browser-tools subcommands, artifacts, and window helpers',
+  { concurrency: false },
+  async () => {
+    await buildOnce()
+    const { launchElectron } = await loadLib()
+    const launch = await launchElectron({
+      command: electronBin,
+      args: [path.join(root, 'fixtures/main.js')],
+      artifactPrefix: 'cli-spec',
+    })
+
+    const wsUrl = launch.wsUrl
+
+    // wait-text and click
+    await runBrowserTool('wait-text', { wsUrl, text: 'click button', timeoutMs: 15000 })
+    await runBrowserTool('click', { wsUrl, testid: 'click-button' })
+    await runBrowserTool('wait-text', { wsUrl, text: 'Select a folder', timeoutMs: 15000 })
+
+    // type + press enter on input
+    await runBrowserTool('type', {
+      wsUrl,
+      testid: 'name-input',
+      value: 'hello',
+      clearFirst: true,
+    })
+    await runBrowserTool('press', { wsUrl, key: 'Enter', testid: 'name-input' })
+    await runBrowserTool('wait-text', { wsUrl, text: 'pressed enter', timeoutMs: 10000 })
+
+    // hover updates text
+    await runBrowserTool('hover', { wsUrl, testid: 'hover-target' })
+    await runBrowserTool('wait-text', { wsUrl, text: 'hovered', timeoutMs: 10000 })
+
+    // list-windows
+    const windows = await runBrowserTool('list-windows', { wsUrl })
+    assert.ok(windows.ok, `list-windows failed: ${JSON.stringify(windows)}`)
+    assert.ok(windows.data.pages.length >= 1)
+
+    // list-selectors
+    const selectors = await runBrowserTool('list-selectors', { wsUrl })
+    assert.ok(selectors.data.testIds.includes('click-button'))
+
+    // dom-snapshot (also writes artifact)
+    const domSnapshot = await runBrowserTool('dom-snapshot', { wsUrl, truncateAt: 5000 })
+    assert.strictEqual(domSnapshot.ok, true)
+
+    // screenshot artifact with custom dir/prefix
+    await runBrowserTool('screenshot', {
+      wsUrl,
+      artifactDir: '.custom-artifacts',
+      artifactPrefix: 'cli-spec',
+      fullPage: true,
+    })
+    await access(path.join(root, '.custom-artifacts/cli-spec/page.png'))
+
+    // scroll into view sets scroll-status
+    await runBrowserTool('scroll-into-view', { wsUrl, testid: 'far-target' })
+    const scrollStatus = await runBrowserTool('get-dom', {
+      wsUrl,
+      css: '#scroll-status',
+      as: 'textContent',
+    })
+    assert.strictEqual(scrollStatus.data.value.trim(), 'scrolled')
+
+    // upload
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'e2e-'))
+    const uploadFile = path.join(tmpDir, 'upload.txt')
+    await writeFile(uploadFile, 'hello')
+    await runBrowserTool('upload', { wsUrl, testid: 'file-input', filePath: uploadFile })
+    const uploadEcho = await runBrowserTool('get-dom', {
+      wsUrl,
+      testid: 'file-output',
+      as: 'textContent',
+    })
+    assert.strictEqual(uploadEcho.data.value.trim(), 'upload.txt')
+
+    // open new window and switch to it
+    await runBrowserTool('click', { wsUrl, testid: 'open-window' })
+    const waited = await runBrowserTool('wait-for-window', {
+      wsUrl,
+      pick: { titleContains: 'Second' },
+      timeoutMs: 15000,
+    })
+    assert.ok(waited.data.url.includes('second.html'))
+
+    const switched = await runBrowserTool('switch-window', {
+      wsUrl,
+      pick: { titleContains: 'Second' },
+    })
+    assert.ok(switched.data.title.includes('Second'))
+
+    // console-harvest (fixture logs on load)
+    const consoleData = await runBrowserTool('console-harvest', { wsUrl })
+    assert.strictEqual(consoleData.ok, true)
+
+    // network-harvest (fixture may be empty but should succeed)
+    const netData = await runBrowserTool('network-harvest', { wsUrl })
+    assert.strictEqual(netData.ok, true)
+
+    // ensure process exits via launch helper quit
+    await launch.quit()
+
+    // confirm artifacts exist
+    const domFile = await findLatestArtifact('dom-snapshot.html')
+    assert.ok(domFile, 'dom-snapshot artifact present')
+
+    const consoleFile = await findLatestArtifact('console-harvest.json')
+    assert.ok(consoleFile, 'console-harvest artifact present')
+
+    const networkFile = await findLatestArtifact('network-harvest.json')
+    assert.ok(networkFile, 'network-harvest artifact present')
+
+    const lastRun = path.join(root, '.e2e-artifacts/last-run')
+    const lastRunTarget = await realpath(lastRun)
+    const resolvedLatestDir = await realpath(path.dirname(networkFile))
+    assert.strictEqual(lastRunTarget, resolvedLatestDir, 'last-run points to latest artifacts')
+    await access(path.join(lastRunTarget, 'network-harvest.json'))
+  },
+)
+
+test('launch-electron CLI start/quit', { concurrency: false }, async () => {
+  await buildOnce()
+
+  const payload = {
+    command: electronBin,
+    args: [path.join(root, 'fixtures/main.js')],
+    artifactPrefix: 'cli-launch',
+  }
+
+  const start = await run('node', [
+    path.join(root, 'dist/cli/launch-electron.js'),
+    'start',
+    JSON.stringify(payload),
+  ])
+  const startJson = JSON.parse(start.stdout)
+  assert.strictEqual(startJson.ok, true)
+  assert.ok(startJson.data.wsUrl)
+  assert.ok(startJson.data.pid)
+
+  const quit = await run('node', [
+    path.join(root, 'dist/cli/launch-electron.js'),
+    'quit',
+    JSON.stringify({
+      launchFile: startJson.data.launchFile,
+      pid: startJson.data.electronPid ?? startJson.data.pid,
+    }),
+  ])
+  const quitJson = JSON.parse(quit.stdout)
+  assert.strictEqual(quitJson.ok, true)
+})
+
+=== src/lib/launch-electron.spec.mjs ===
+import assert from 'node:assert'
+import { execFile } from 'node:child_process'
+import { readdir } from 'node:fs/promises'
+import path from 'node:path'
+import { test } from 'node:test'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
+
+const execFileAsync = promisify(execFile)
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const root = path.join(__dirname, '..', '..')
+const electronBin = (() => {
+  if (process.platform === 'win32') {
+    return path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
+  }
+  return path.join(root, 'node_modules/.bin/electron')
+})()
+const pnpmBin = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+
+let built = false
+const buildOnce = async () => {
+  if (built) return
+  await execFileAsync(pnpmBin, ['build'], {
+    cwd: root,
+    env: { ...process.env, NODE_ENV: 'test' },
+    shell: process.platform === 'win32', // Node 20+: .cmd requires shell on Windows
+  })
+  built = true
+}
+
+const loadLib = () => import(pathToFileURL(path.join(root, 'dist/index.js')).href)
+
+const countFds = async () => {
+  const candidates = ['/proc/self/fd', '/dev/fd']
+  for (const dir of candidates) {
+    try {
+      const entries = await readdir(dir)
+      const numeric = entries.filter((e) => /^\d+$/.test(e))
+      if (numeric.length) return numeric.length
+    } catch {
+      // try next
+    }
+  }
+  return -1 // signal unsupported environment
+}
+
+test(
+  'launchElectron closes log file descriptors between runs',
+  { concurrency: false },
+  async () => {
+    await buildOnce()
+    const { launchElectron } = await loadLib()
+
+    const before = await countFds()
+
+    for (let i = 0; i < 4; i += 1) {
+      const launch = await launchElectron({
+        command: electronBin,
+        args: [path.join(root, 'fixtures/main.js')],
+        artifactPrefix: `fd-leak-${i}`,
+        headless: true,
+      })
+      await launch.quit()
+    }
+
+    const after = await countFds()
+
+    if (before !== -1 && after !== -1) {
+      assert.ok(after <= before + 2, `fd count grew unexpectedly: before=${before}, after=${after}`)
+    }
+  },
+)

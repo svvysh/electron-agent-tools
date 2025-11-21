@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 const here = path.dirname(new URL(import.meta.url).pathname)
@@ -104,9 +104,7 @@ const main = async () => {
     ...tests,
   ]
 
-  const distDir = path.join(root, 'dist')
-  await mkdir(distDir, { recursive: true })
-  const outputPath = path.join(distDir, 'llms.txt')
+  const outputPath = path.join(root, 'llms.txt')
 
   const content = sections
     .map((section) => `=== ${section.title} ===\n${section.body}\n`)

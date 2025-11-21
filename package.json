@@ -32,7 +32,8 @@
   "types": "dist/lib/types.d.ts",
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "llms.txt"
   ],
   "bin": {
     "browser-tools": "dist/cli/browser-tools.js",
