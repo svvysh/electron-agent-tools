@@ -2,16 +2,16 @@ import type { Page } from 'playwright'
 
 export type ConnectOptions = {
   wsUrl: string
-  pick?: { titleContains?: string; urlIncludes?: string }
+  pick?: { titleContains?: string | undefined; urlIncludes?: string | undefined }
 }
 
 export type Selector = {
-  testid?: string
-  role?: { role: string; name?: string }
-  text?: string
-  css?: string
-  nth?: number
-  timeoutMs?: number
+  testid?: string | undefined
+  role?: { role: string; name?: string | undefined } | undefined
+  text?: string | undefined
+  css?: string | undefined
+  nth?: number | undefined
+  timeoutMs?: number | undefined
 }
 
 export type ArtifactOptions = {
@@ -43,7 +43,7 @@ export type LaunchResult = {
   electronPid?: number | undefined
   artifactDir: string
   /** Persisted launch metadata (optional helper for CLIs). */
-  launchFile?: string
+  launchFile?: string | undefined
   quit: () => Promise<void>
 }
 
@@ -56,23 +56,23 @@ export type NetworkHarvest = {
 
 export interface Driver {
   /** Access to the underlying Playwright page (optional). */
-  page?: Page
+  page?: Page | undefined
   click(sel: Selector): Promise<void>
-  type(sel: Selector & { value: string; clearFirst?: boolean }): Promise<void>
-  press(key: string, sel?: Selector): Promise<void>
+  type(sel: Selector & { value: string; clearFirst?: boolean | undefined }): Promise<void>
+  press(key: string, sel?: Selector | undefined): Promise<void>
   hover(sel: Selector): Promise<void>
   scrollIntoView(sel: Selector): Promise<void>
   upload(sel: Selector, filePath: string): Promise<void>
-  waitText(text: string, timeoutMs?: number): Promise<void>
-  screenshot(path: string, fullPage?: boolean): Promise<void>
-  dumpOuterHTML(truncateAt?: number): Promise<string>
-  listSelectors(max?: number): Promise<{
+  waitText(text: string, timeoutMs?: number | undefined): Promise<void>
+  screenshot(path: string, fullPage?: boolean | undefined): Promise<void>
+  dumpOuterHTML(truncateAt?: number | undefined): Promise<string>
+  listSelectors(max?: number | undefined): Promise<{
     testIds: string[]
     roles: { role: string; name: string | null; selector: string }[]
     texts: { text: string; selector: string }[]
   }>
   waitForWindow(
-    timeoutMs?: number,
+    timeoutMs?: number | undefined,
     pick?: ConnectOptions['pick'],
   ): Promise<{ url: string; title: string }>
   switchWindow(pick: ConnectOptions['pick']): Promise<{ url: string; title: string }>

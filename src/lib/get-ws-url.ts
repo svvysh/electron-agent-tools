@@ -2,7 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 
 const PER_REQUEST_TIMEOUT_MS = 1_500
 
-export type WsOptions = { port: number; timeoutMs?: number }
+export type WsOptions = { port: number; timeoutMs?: number | undefined }
 
 /**
  * Polls the Chrome DevTools /json/version endpoint and returns the webSocketDebuggerUrl.
