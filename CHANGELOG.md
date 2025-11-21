@@ -1,5 +1,11 @@
 # electron-agent-tools
 
+## 0.1.4
+
+### Patch Changes
+
+- 322b930: Include entire README in llms.txt.
+
 ## 0.1.3
 
 ### Patch Changes
