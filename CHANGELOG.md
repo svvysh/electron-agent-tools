@@ -1,5 +1,11 @@
 # electron-agent-tools
 
+## 0.1.7
+
+### Patch Changes
+
+- d469ce1: Fix missing undefined property.
+
 ## 0.1.6
 
 ### Patch Changes
