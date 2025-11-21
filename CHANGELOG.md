@@ -1,5 +1,11 @@
 # electron-agent-tools
 
+## 0.1.3
+
+### Patch Changes
+
+- 6d30c69: Add llms.txt to release
+
 ## 0.1.2
 
 ### Patch Changes
