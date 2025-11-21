@@ -27,6 +27,11 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
+      # Use npm trusted publishing (OIDC); no NPM_TOKEN required
+      - uses: npm/action-oidc-auth@v1
+        with:
+          registry: https://registry.npmjs.org
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -34,7 +39,7 @@ jobs:
         uses: changesets/action@v1
         with:
           version: pnpm release:version
-          publish: pnpm release:publish
+          publish: pnpm release:publish --registry https://registry.npmjs.org --provenance --access public
           commit: "chore: version packages"
           title: "chore: release"
         env:
