@@ -9,32 +9,6 @@ const root = path.resolve(here, '..')
 const readUtf8 = (p) => readFile(p, 'utf8')
 const toPosix = (p) => p.split(path.sep).join('/')
 
-const extractCaption = (readme) => {
-  const lines = readme.split(/\r?\n/)
-  let i = 0
-  while (i < lines.length && lines[i].trim().startsWith('#')) i += 1
-  while (i < lines.length && lines[i].trim() === '') i += 1
-  const out = []
-  for (; i < lines.length; i += 1) {
-    if (lines[i].trim() === '') break
-    out.push(lines[i])
-  }
-  return out.join('\n').trim()
-}
-
-const extractSection = (readme, heading) => {
-  const lines = readme.split(/\r?\n/)
-  const idx = lines.findIndex((line) => line.trim().toLowerCase() === heading.trim().toLowerCase())
-  if (idx === -1) return ''
-  const out = []
-  for (let i = idx + 1; i < lines.length; i += 1) {
-    const line = lines[i]
-    if (/^##\s+/.test(line) && i > idx + 1) break
-    out.push(line)
-  }
-  return out.join('\n').trim()
-}
-
 const gatherExamples = async () => {
   const dir = path.join(root, 'examples')
   const entries = await readdir(dir)
@@ -90,15 +64,12 @@ const gatherTests = async () => {
 
 const main = async () => {
   const readme = await readUtf8(path.join(root, 'README.md'))
-  const caption = extractCaption(readme)
-  const whatYouGet = extractSection(readme, '## What you get')
   const api = await readUtf8(path.join(root, 'docs/api.md'))
   const examples = await gatherExamples()
   const tests = await gatherTests()
 
   const sections = [
-    { title: 'README caption', body: caption },
-    { title: 'README: What you get', body: whatYouGet },
+    { title: 'README.md', body: readme.trimEnd() },
     { title: 'docs/api.md', body: api.trimEnd() },
     ...examples,
     ...tests,
