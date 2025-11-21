@@ -27,10 +27,9 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
-      # Use npm trusted publishing (OIDC); no NPM_TOKEN required
-      - uses: npm/action-oidc-auth@v1
-        with:
-          registry: https://registry.npmjs.org
+      # Ensure npm supports OIDC trusted publishing (requires npm >= 11.5.1)
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -45,3 +44,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
+          NODE_AUTH_TOKEN: ""

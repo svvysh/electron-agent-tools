@@ -11,6 +11,10 @@
       "url": "https://polarzero.xyz"
     }
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/0xpolarzero/electron-agent-tools.git"
+  },
   "engines": {
     "node": ">=18"
   },
