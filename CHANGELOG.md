@@ -1,5 +1,11 @@
 # electron-agent-tools
 
+## 0.1.5
+
+### Patch Changes
+
+- e0912bf: Fix imports.
+
 ## 0.1.4
 
 ### Patch Changes
