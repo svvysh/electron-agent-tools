@@ -49,6 +49,33 @@ export type LaunchResult = {
 
 export type ConsoleEvent = { type: string; text: string; ts: number }
 
+export type ConsoleSource = 'main' | 'preload' | 'renderer' | 'isolated' | 'worker' | 'unknown'
+
+export type ConsoleEntry = ConsoleEvent & {
+  source: ConsoleSource
+  args?: unknown[]
+  location?: { url?: string; lineNumber?: number; columnNumber?: number }
+}
+
+export type FlushConsoleOptions = { sources?: ConsoleSource[]; sinceTs?: number }
+
+export type IpcTraceDirection = 'renderer->main' | 'main->renderer'
+
+export type IpcTraceEntry = {
+  direction: IpcTraceDirection
+  kind: 'send' | 'invoke' | 'event'
+  channel: string
+  payload: unknown
+  durationMs?: number
+  error?: string
+  ts: number
+}
+
+export type SnapshotPerWorld = {
+  world: ConsoleSource
+  values: Record<string, unknown>
+}
+
 export type NetworkHarvest = {
   failed: string[]
   errorResponses: { url: string; status: number }[]
@@ -77,6 +104,32 @@ export interface Driver {
   ): Promise<{ url: string; title: string }>
   switchWindow(pick: ConnectOptions['pick']): Promise<{ url: string; title: string }>
   flushConsole(): Promise<ConsoleEvent[]>
+  flushConsole(opts?: FlushConsoleOptions): Promise<ConsoleEntry[]>
   flushNetwork(): Promise<NetworkHarvest>
+  evalInRendererMainWorld<T = unknown>(fn: (...args: unknown[]) => T, arg?: unknown): Promise<T>
+  evalInIsolatedWorld<T = unknown>(fn: (...args: unknown[]) => T, arg?: unknown): Promise<T>
+  evalInPreload<T = unknown>(fn: (...args: unknown[]) => T, arg?: unknown): Promise<T>
+  onRendererReload(cb: () => void): () => void
+  onPreloadReady(cb: () => void): () => void
+  waitForBridge(timeoutMs?: number): Promise<void>
+  injectGlobals(
+    globals: Record<string, unknown>,
+    opts?: { persist?: boolean; worlds?: Array<'renderer' | 'isolated' | 'preload'> },
+  ): Promise<void>
+  enableIpcTracing(enabled?: boolean): Promise<void>
+  flushIpc(): Promise<IpcTraceEntry[]>
+  snapshotGlobals(
+    names: string[],
+    opts?: { worlds?: Array<'renderer' | 'isolated' | 'preload' | 'main'> },
+  ): Promise<SnapshotPerWorld[]>
+  waitForTextAcrossReloads(
+    text: string,
+    opts?: { timeoutMs?: number; perAttemptTimeoutMs?: number },
+  ): Promise<void>
+  dumpDOM(
+    selector?: string,
+    truncateAt?: number,
+  ): Promise<{ html: string; url: string; title: string }>
+  getRendererInspectorUrl(): Promise<string>
   close(): Promise<void>
 }

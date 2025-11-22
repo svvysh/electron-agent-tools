@@ -119,6 +119,15 @@ Subcommands and inputs (implemented via Playwright `Page`):
 * **`console-harvest`** → `{ "wsUrl":"…" }`  
   **Output**: `{ "events":[ { "type","text","ts" } ] }`
 
+* **`snapshot-globals`** → `{ "wsUrl":"…", "names":["foo","bar"] }`  
+  **Output**: `{ "snapshots": [ { "world":"renderer","values":{...} }, ... ] }`
+
+* **`ipc-harvest`** → `{ "wsUrl":"…" }` (auto-enables tracing in preload if available)  
+  **Output**: `{ "events": [ { direction, kind, channel, payload, durationMs?, error?, ts } ] }`
+
+* **`dump-dom`** → `{ "wsUrl":"…", "selector"?: "#node", "truncateAt"?: 50000 }`  
+  **Output**: `{ "html":"…", "url":"…", "title":"…" }`
+
 * **`network-harvest`** → `{ "wsUrl":"…" }`  
   **Output**: `{ "failed":[urls], "errorResponses":[ { "url","status" } ] }`
 
@@ -217,8 +226,30 @@ export interface Driver {
   }>;
   waitForWindow(timeoutMs?: number, pick?: ConnectOptions['pick']): Promise<{ url: string; title: string }>;
   switchWindow(pick: ConnectOptions['pick']): Promise<{ url: string; title: string }>;
-  flushConsole(): Promise<ConsoleEvent[]>;
+  flushConsole(opts?: FlushConsoleOptions): Promise<ConsoleEntry[]>;
   flushNetwork(): Promise<NetworkHarvest>;
+  evalInRendererMainWorld<T = unknown>(fn: (...args: any[]) => T, arg?: unknown): Promise<T>;
+  evalInIsolatedWorld<T = unknown>(fn: (...args: any[]) => T, arg?: unknown): Promise<T>;
+  evalInPreload<T = unknown>(fn: (...args: any[]) => T, arg?: unknown): Promise<T>;
+  onRendererReload(cb: () => void): () => void;
+  onPreloadReady(cb: () => void): () => void;
+  waitForBridge(timeoutMs?: number): Promise<void>;
+  injectGlobals(
+    globals: Record<string, unknown>,
+    opts?: { persist?: boolean; worlds?: Array<'renderer' | 'isolated' | 'preload'> },
+  ): Promise<void>;
+  enableIpcTracing(enabled?: boolean): Promise<void>;
+  flushIpc(): Promise<IpcTraceEntry[]>;
+  snapshotGlobals(
+    names: string[],
+    opts?: { worlds?: Array<'renderer' | 'isolated' | 'preload' | 'main'> },
+  ): Promise<SnapshotPerWorld[]>;
+  waitForTextAcrossReloads(
+    text: string,
+    opts?: { timeoutMs?: number; perAttemptTimeoutMs?: number },
+  ): Promise<void>;
+  dumpDOM(selector?: string, truncateAt?: number): Promise<{ html: string; url: string; title: string }>;
+  getRendererInspectorUrl(): Promise<string>;
   close(): Promise<void>;
 }
 
@@ -241,7 +272,11 @@ export async function launchElectron(opts: LaunchOptions): Promise<LaunchResult>
   * `screenshot`: `page.screenshot({ path, fullPage })`.
   * `dumpOuterHTML`: `page.evaluate(() => document.documentElement.outerHTML)`.
   * `listSelectors`: evaluate in page to gather data-testid / role / text hints (same shape as before).
-* Console capture: `page.on('console', ...)` and `page.on('pageerror', ...)` push into an array for `flushConsole`. Events emitted **before** the driver connects are not retroactively captured.
+* World-aware helpers: Driver exposes `evalInRendererMainWorld`, `evalInIsolatedWorld`, `evalInPreload`, `waitForBridge`, `onRendererReload`, `onPreloadReady`, and `injectGlobals` (with persistence across reloads via `addInitScript` + CDP context hooks).
+* IPC tracing: opt-in via `driver.enableIpcTracing()`; traces `ipcRenderer.send/invoke/on` with payload + duration; `driver.flushIpc()` returns buffered entries.
+* Snapshots: `driver.snapshotGlobals(['foo','bar'])` returns per-world values; `driver.dumpDOM(selector?)` and `waitForTextAcrossReloads` aid flaky reload-prone UIs.
+* DevTools access: `driver.getRendererInspectorUrl()` builds a `devtools://…` URL pointing at the current renderer target.
+* Console capture: CDP `Runtime.consoleAPICalled` + `Log.entryAdded` on **all targets** (browser/main + every renderer page) with per-world tags (`main`, `preload`, `renderer`, `isolated`, `worker`). `driver.flushConsole({ sources?, sinceTs? })` returns and clears structured entries. Attach is still best-effort (events before CDP connection may be missed).
 * Network capture: `page.on('requestfailed', …)` and `page.on('response', …)` (status ≥ 400) to fill `NetworkHarvest`; requests that finish before the driver attaches will not appear.
 
 ## 5) Optional test‑only IPC shims

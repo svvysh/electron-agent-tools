@@ -12,8 +12,10 @@ import type {
   ConnectOptions,
   Selector,
   Driver,
-  ConsoleEvent,
+  ConsoleEntry,
   NetworkHarvest,
+  IpcTraceEntry,
+  SnapshotPerWorld,
   WsOptions,
   LaunchOptions,
   LaunchResult,
@@ -57,8 +59,17 @@ import type {
 - `listSelectors(max = 200): Promise<{ testIds; roles; texts; }>` — Gathers top selectors from the document for quick discovery.
 - `waitForWindow(timeoutMs?: number, pick?: ConnectOptions['pick']): Promise<{ url; title }>` — Waits for an existing or newly opened window matching hints and rewires listeners to that page. Safe to call while multiple contexts exist; background timeouts are cancelled so no unhandled rejections leak.
 - `switchWindow(pick: ConnectOptions['pick']): Promise<{ url; title }>` — Chooses a window by `titleContains` / `urlIncludes` hints.
-- `flushConsole(): Promise<ConsoleEvent[]>` — Returns and clears buffered console/pageerror events.
+- `flushConsole(opts?: { sources?: ('main'|'preload'|'renderer'|'isolated'|'worker')[]; sinceTs?: number }): Promise<ConsoleEntry[]>` — Tagged console/log events from main + all renderer worlds.
 - `flushNetwork(): Promise<NetworkHarvest>` — Returns and clears buffered failed requests and 4xx/5xx responses.
+- `evalInRendererMainWorld / evalInIsolatedWorld / evalInPreload` — CDP evaluate helpers scoped to the exact JS world.
+- `onRendererReload` / `onPreloadReady` — Lifecycle hooks to re-register globals across Vite/navigations.
+- `waitForBridge(timeoutMs?)` — Polls preload for `__eatBridgeReady__`/`__eatTestHarness__`.
+- `injectGlobals(globals, { persist?, worlds? })` — Deterministically replays helper objects into chosen worlds after reloads.
+- `enableIpcTracing()` + `flushIpc()` — Wrap `ipcRenderer` to buffer channel/payload/duration/err metadata.
+- `snapshotGlobals(names, { worlds? })` — Returns values per world for quick state inspection.
+- `waitForTextAcrossReloads(text, { timeoutMs?, perAttemptTimeoutMs? })` — Retry-friendly wait that tolerates renderer reloads and captures DOM on failure.
+- `dumpDOM(selector?, truncateAt?)` — Dumps `outerHTML` (optionally scoped) with url/title, used by wait helpers on timeout.
+- `getRendererInspectorUrl()` — Builds a `devtools://…` URL pointing at the current renderer target for headless DevTools.
 - `close(): Promise<void>` — Disconnects from the CDP session (leaves the Electron app running).
 
 ### `Selector` shape
@@ -70,13 +81,14 @@ import type {
 - Optionals: `nth?: number` (0‑based), `timeoutMs?: number`.
 
 ### Event/harvest types
-- `ConsoleEvent`: `{ type: string; text: string; ts: number }` (`page.on('console')` + `pageerror`).
+- `ConsoleEntry`: `{ source: 'main' | 'preload' | 'renderer' | 'isolated' | 'worker' | 'unknown', type: string, text: string, ts: number, args?, location? }` (CDP console + log with world tags).
 - `NetworkHarvest`: `{ failed: string[]; errorResponses: { url: string; status: number }[] }`.
+- `IpcTraceEntry`: `{ direction: 'renderer->main' | 'main->renderer', kind: 'send' | 'invoke' | 'event', channel: string, payload: unknown, durationMs?: number, error?: string, ts: number }`.
 
 ### Notes
 - Selectors are resolved with Playwright locators in priority order: testid → role → text → css; then `nth` is applied.
 - Errors from driver methods are wrapped as `AppError` with a `code` (e.g., `E_SELECTOR`, `E_WAIT_TIMEOUT`, `E_FS`).
-- Console/network harvesting only records events after the driver connects; early app logs/requests may be missed if you attach late.
+- Console harvesting tags worlds via CDP and still only records after the driver connects; attach early (or launch via `launchElectron`) to capture the earliest logs.
 
 ## CLI: `browser-tools`
 
@@ -105,7 +117,10 @@ Subcommands
 - `upload` — Input: `{ wsUrl, filePath, ...Selector }`. Output: `{ uploaded: "filePath" }`.
 - `get-dom` — Input: `{ wsUrl, as: 'innerHTML' | 'textContent', ...Selector }`. Output: `{ value: string }`.
 - `screenshot` — Input: `{ wsUrl, path?, fullPage? }` (default path `.e2e-artifacts/<ts>/page.png`). Output: `{ path }`.
-- `console-harvest` — Input: `{ wsUrl }`. Writes `.e2e-artifacts/<ts>/console-harvest.json`; Output: `{ events }` (ConsoleEvent[]).
+- `console-harvest` — Input: `{ wsUrl }`. Writes `.e2e-artifacts/<ts>/console-harvest.json`; Output: `{ events }` (ConsoleEntry[]).
+- `snapshot-globals` — Input: `{ wsUrl, names: ["foo","bar"], worlds? }`. Output: `{ snapshots }` per world.
+- `ipc-harvest` — Input: `{ wsUrl }`. Enables tracing (if not already) and dumps buffered IPC trace entries to artifact + stdout.
+- `dump-dom` — Input: `{ wsUrl, selector?, truncateAt? }`. Writes `.e2e-artifacts/<ts>/dom-dump.html`; Output: `{ html, url, title }`.
 - `network-harvest` — Input: `{ wsUrl }`. Writes `.e2e-artifacts/<ts>/network-harvest.json`; Output: `NetworkHarvest`.
 - `wait-for-window` — Input: `{ wsUrl, pick?, timeoutMs? }`. Output: `{ url, title }`.
 - `switch-window` — Input: `{ wsUrl, pick }`. Output: `{ url, title }`.

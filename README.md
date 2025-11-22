@@ -46,6 +46,15 @@ await quit()
 
 Check `examples/` for a ready-to-run smoke test against the bundled fixture app.
 
+## Debugging helpers
+- **Tagged console harvest**: `driver.flushConsole({ sources: ['main','preload','renderer','isolated'] })` returns structured entries across worlds; `browser-tools console-harvest` writes them to artifacts.
+- **World-aware eval**: `driver.evalInPreload`, `evalInRendererMainWorld`, `evalInIsolatedWorld` let you probe exactly where globals live.
+- **Lifecycle hooks**: `onRendererReload` / `onPreloadReady` plus `waitForBridge()` for contextIsolation + Vite reloads.
+- **Deterministic injection**: `injectGlobals(obj, { persist: true })` replays helpers into renderer + preload on every navigation.
+- **IPC tracing**: `enableIpcTracing()` + `flushIpc()` capture channel/payload/duration; `browser-tools ipc-harvest` writes them to disk.
+- **State snapshots**: `snapshotGlobals(['foo','bar'])`, `dumpDOM(selector?)`, and `waitForTextAcrossReloads` help debug flaky UIs.
+- **DevTools in headless**: `getRendererInspectorUrl()` builds a `devtools://…` link for the current renderer target.
+
 ## Development
 - `pnpm install`
 - `pnpm build`

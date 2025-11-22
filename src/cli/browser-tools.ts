@@ -242,6 +242,48 @@ const run = async () => {
         printJson({ ok: true, data: { events } })
         return
       }
+      case 'snapshot-globals': {
+        if (!wsUrl || !Array.isArray((payload as JsonInput).names)) {
+          throw new Error('wsUrl and names[] required')
+        }
+        const names = (payload as { names: unknown }).names as string[]
+        const driver = await connectAndPick({ wsUrl })
+        const snapshots = await driver.snapshotGlobals(names)
+        await driver.close()
+        printJson({ ok: true, data: { snapshots } })
+        return
+      }
+      case 'ipc-harvest': {
+        if (!wsUrl) throw new Error('wsUrl required')
+        const driver = await connectAndPick({ wsUrl })
+        await driver.enableIpcTracing(true)
+        const events = await driver.flushIpc()
+        await driver.close()
+
+        const { dir } = await prepareRun(payload)
+        const outPath = path.join(dir, 'ipc-harvest.json')
+        await ensureArtifactPath(outPath)
+        await writeFile(outPath, JSON.stringify(events, null, 2), 'utf-8')
+
+        printJson({ ok: true, data: { events } })
+        return
+      }
+      case 'dump-dom': {
+        if (!wsUrl) throw new Error('wsUrl required')
+        const sel = typeof payload.selector === 'string' ? (payload.selector as string) : undefined
+        const truncateAt =
+          typeof payload.truncateAt === 'number' ? (payload.truncateAt as number) : undefined
+        const driver = await connectAndPick({ wsUrl })
+        const out = await driver.dumpDOM(sel, truncateAt)
+        await driver.close()
+        const { dir } = await prepareRun(payload)
+        const outPath = path.join(dir, 'dom-dump.html')
+        await ensureArtifactPath(outPath)
+        await writeFile(outPath, out.html, 'utf-8')
+
+        printJson({ ok: true, data: out })
+        return
+      }
       case 'network-harvest': {
         if (!wsUrl) throw new Error('wsUrl required')
         const driver = await connectAndPick({ wsUrl })

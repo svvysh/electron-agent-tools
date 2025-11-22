@@ -7,7 +7,7 @@ Refer to docs/specs.md for the full specification.
 - Node >=18, ESM package. Dependencies: Playwright.
 - Provide:
  1) CLI: `browser-tools <subcmd>` (JSON-in/JSON-out). Add subcommands `press`, `hover`, `scroll-into-view`, `upload`, `wait-for-window`, `switch-window` plus existing actions. Artifacts accept `artifactDir`/`artifactPrefix` overrides. Optional CLI: `launch-electron start|quit` to spawn and drain Electron with JSON output.
-  2) Library API: `connectAndPick(opts)` returns a Driver wrapping **Playwright Page** with methods: click, type, press, hover, scrollIntoView, upload, waitText, screenshot, dumpOuterHTML, listSelectors, waitForWindow, switchWindow, flushConsole, flushNetwork, close.
+  2) Library API: `connectAndPick(opts)` returns a Driver wrapping **Playwright Page** with methods: click, type, press, hover, scrollIntoView, upload, waitText, screenshot, dumpOuterHTML, listSelectors, waitForWindow, switchWindow, flushConsole, flushNetwork, close **plus world-aware helpers (evalInPreload/Isolated/Renderer), lifecycle hooks, deterministic helper injection, IPC tracing, snapshotGlobals, waitForTextAcrossReloads, dumpDOM, getRendererInspectorUrl**.
   3) Library helper: `launchElectron(opts)` to spawn the Electron app, pick CDP port, capture stdout/stderr artifacts, return `{ wsUrl, pid, quit }`.
   3) Selector strategy: prefer Playwright locators (data-testid -> role/name -> text -> CSS). Visibility handling left to Playwright.
  4) Launch: either consumer-spawned or via `launchElectron`. Suggested env: E2E=1, NODE_ENV=test, E2E_CDP_PORT, ELECTRON_ENABLE_LOGGING=1; discover `webSocketDebuggerUrl` from http://127.0.0.1:<port>/json/version.

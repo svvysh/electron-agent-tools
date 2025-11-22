@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -31,7 +31,14 @@ const createWindow = () => {
   win.loadFile(path.join(__dirname, 'index.html'))
 }
 
+ipcMain.handle('eat-ping', async (_event, message = 'ping') => {
+  const reply = `pong:${message}`
+  console.log(`ipc-main-reply ${reply}`)
+  return reply
+})
+
 app.whenReady().then(() => {
+  console.log('main-ready')
   createWindow()
 
   app.on('activate', () => {
