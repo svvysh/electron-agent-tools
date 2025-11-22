@@ -1,5 +1,13 @@
 # electron-agent-tools
 
+## 0.2.0
+
+### Minor Changes
+
+- 5c2afbc: - Add world-aware helpers (renderer/isolated/preload eval, lifecycle hooks, waitForBridge) plus deterministic `injectGlobals`.
+  - Introduce IPC tracing and harvesting, console filtering, DOM dump, and snapshot-globals utilities for richer debugging.
+  - Fixture app now exposes bridge readiness and IPC echo for the new helpers and docs cover the expanded API surface.
+
 ## 0.1.7
 
 ### Patch Changes
