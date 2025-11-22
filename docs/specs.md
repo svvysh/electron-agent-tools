@@ -5,9 +5,9 @@
 ## 0) Goals & non‑goals
 
 * **Goals**
-  * Provide a **small registry of tools** (library APIs + CLI entrypoints) to launch, inspect, and drive an Electron app: click buttons, type, read DOM/HTML, capture screenshots, harvest console/network, optional test‑only IPC.
-  * **Deterministic JSON I/O** for each CLI command; suitable for LLM orchestration.
-  * Use **Playwright for everything** (locator engine, waits, screenshots, console/network listeners).
+  * Provide a **small registry of tools** (library APIs + CLI entrypoints) to launch, inspect, and drive an Electron app: click buttons, type, read DOM/HTML, capture screenshots/DOM dumps, and stream all runtime signals to a single log file.
+  * Log data lives in a human‑readable `run.log` per run; no buffered harvest/flush APIs or JSON log payloads.
+  * Use **Playwright for everything** (locator engine, waits, screenshots, console/network listeners feeding the streaming log).
 * **Headless/background OK**; GUI visibility not required (Electron launched with `--headless --disable-gpu` when `E2E_HEADLESS=1` or `headless: true`; fallback to Xvfb in CI on Linux if needed).
   * **Safety & cleanup** on failure/SIGINT; artifacts and logs collected.
 
@@ -28,7 +28,7 @@
 
 * Two paths:
   * **Consumer-managed**: launch the Electron app (e.g., `pnpm exec electron ...`) with env `E2E=1`, `NODE_ENV=test`, `E2E_CDP_PORT=<port>`, `ELECTRON_ENABLE_LOGGING=1`, then call `getWsUrl` to discover `wsUrl`.
-* **Library helper**: `launchElectron(opts)` spawns the Electron command, picks/assigns a CDP port, polls for `wsUrl`, records stdout/stderr into artifacts, and returns `{ wsUrl, pid, electronPid?, quit }`; `quit()` gracefully ends the launched app. A CLI twin `launch-electron start|quit` is allowed.
+* **Library helper**: `launchElectron(opts)` spawns the Electron command, picks/assigns a CDP port, polls for `wsUrl`, and streams stdout/stderr plus lifecycle notices into `<run-dir>/run.log`; returns `{ wsUrl, pid, electronPid?, quit }`. A CLI twin `launch-electron start|quit` is allowed.
 * App must enable CDP in **main**:
 
   ```ts
@@ -42,23 +42,11 @@
 * Driver connects to the **browser** WS endpoint via `chromium.connectOverCDP(wsUrl)`, enumerates **targets** (type `page`), and selects the main renderer:
   * Prefer URLs starting `app://`, `file://`, or `http://localhost:`; else match `pick.titleContains`/`pick.urlIncludes`.
 
-## 3) CLI command registry (JSON in → JSON out)
+## 3) CLI command registry (JSON input; minimal output)
 
-All commands print **exactly one** JSON object to stdout:
+Interaction commands still accept a single JSON argument. They may print a compact JSON status or nothing more than errors; runtime signals are consumed from the streaming `run.log` instead of JSON harvest payloads.
 
-Success:
-
-```json
-{ "ok": true, "data": { ... } }
-```
-
-Failure:
-
-```json
-{ "ok": false, "error": { "message": "...", "code": "E_CODE", "details": { ... } } }
-```
-
-Invalid JSON input is rejected before dispatch with exit code 1:
+Invalid JSON input is rejected before dispatch with exit code 1 and a small JSON error payload:
 
 ```json
 { "ok": false, "error": { "code": "E_BAD_JSON", "message": "Invalid JSON input", "details": { "rawArg": "...", "parseError": "..." } } }
@@ -74,9 +62,6 @@ Subcommands and inputs (implemented via Playwright `Page`):
 
 * **`list-windows`** → `{ "wsUrl": "…" }`  
   **Output**: `{ "pages":[ { "targetId","url","title" } ] }`
-
-* **`dom-snapshot`** → `{ "wsUrl":"…", "truncateAt": 250000 }`  
-  **Output**: `{ "url","title","outerHTML" }`
 
 * **`list-selectors`** → `{ "wsUrl":"…", "max":200 }`  
   **Output**:
@@ -113,23 +98,14 @@ Subcommands and inputs (implemented via Playwright `Page`):
 * **`get-dom`** → selector + `{ "as":"innerHTML"|"textContent" }`  
   **Output**: `{ "value": "…" }`
 
-* **`screenshot`** → `{ "wsUrl":"…", "path":”.e2e-artifacts/page.png", "fullPage": true }`  
-  **Output**: `{ "path":"…" }`
-
-* **`console-harvest`** → `{ "wsUrl":"…" }`  
-  **Output**: `{ "events":[ { "type","text","ts" } ] }`
+* **`screenshot`** → `{ "wsUrl":"…", "path":”.e2e-artifacts/page.png”, "fullPage": true }`  
+  **Output**: may return `{ "path":"…" }` but correctness is inferred from the appended log line in `run.log`.
 
 * **`snapshot-globals`** → `{ "wsUrl":"…", "names":["foo","bar"] }`  
   **Output**: `{ "snapshots": [ { "world":"renderer","values":{...} }, ... ] }`
 
-* **`ipc-harvest`** → `{ "wsUrl":"…" }` (auto-enables tracing in preload if available)  
-  **Output**: `{ "events": [ { direction, kind, channel, payload, durationMs?, error?, ts } ] }`
-
 * **`dump-dom`** → `{ "wsUrl":"…", "selector"?: "#node", "truncateAt"?: 50000 }`  
-  **Output**: `{ "html":"…", "url":"…", "title":"…" }`
-
-* **`network-harvest`** → `{ "wsUrl":"…" }`  
-  **Output**: `{ "failed":[urls], "errorResponses":[ { "url","status" } ] }`
+  **Output**: `{ "html":"…", "url":"…", "title":"…" }` plus a log line in `run.log` describing the write.
 
 * **`wait-for-window`** → `{ "wsUrl":"…", "pick": { "titleContains"?, "urlIncludes"? }, "timeoutMs"? }`  
   **Output**: `{ "url","title" }` (returns once a matching window exists or appears.)
@@ -140,7 +116,7 @@ Subcommands and inputs (implemented via Playwright `Page`):
 ### 3.2 `launch-electron` (CLI helper)
 
 * **`start|launch`** → `{ "command":"pnpm", "args":["exec","electron","fixtures/main.js"], "headless"?:true, "cdpPort"?, "artifactDir"?, "artifactPrefix"? }`  
-  **Output**: `{ "wsUrl", "pid", "electronPid", "cdpPort", "artifactDir", "launchFile", "quitHint": { "pid","launchFile" } }` (`electronPid` points to the real Electron binary; use it for quits.)
+  **Output**: `{ "wsUrl", "pid", "electronPid", "cdpPort", "artifactDir", "launchFile", "quitHint": { "pid","launchFile" } }` (`electronPid` points to the real Electron binary; use it for quits.) A streaming `run.log` is opened in the same run directory.
 
 ### 3.4 CI shortcut
 
@@ -188,9 +164,6 @@ export type Selector = {
   timeoutMs?: number;
 };
 
-export type ConsoleEvent = { type: string; text: string; ts: number };
-export type NetworkHarvest = { failed: string[]; errorResponses: { url: string; status: number }[] };
-
 export type LaunchOptions = {
   command: string;
   args?: string[];
@@ -226,8 +199,6 @@ export interface Driver {
   }>;
   waitForWindow(timeoutMs?: number, pick?: ConnectOptions['pick']): Promise<{ url: string; title: string }>;
   switchWindow(pick: ConnectOptions['pick']): Promise<{ url: string; title: string }>;
-  flushConsole(opts?: FlushConsoleOptions): Promise<ConsoleEntry[]>;
-  flushNetwork(): Promise<NetworkHarvest>;
   evalInRendererMainWorld<T = unknown>(fn: (...args: any[]) => T, arg?: unknown): Promise<T>;
   evalInIsolatedWorld<T = unknown>(fn: (...args: any[]) => T, arg?: unknown): Promise<T>;
   evalInPreload<T = unknown>(fn: (...args: any[]) => T, arg?: unknown): Promise<T>;
@@ -239,7 +210,6 @@ export interface Driver {
     opts?: { persist?: boolean; worlds?: Array<'renderer' | 'isolated' | 'preload'> },
   ): Promise<void>;
   enableIpcTracing(enabled?: boolean): Promise<void>;
-  flushIpc(): Promise<IpcTraceEntry[]>;
   snapshotGlobals(
     names: string[],
     opts?: { worlds?: Array<'renderer' | 'isolated' | 'preload' | 'main'> },
@@ -273,11 +243,11 @@ export async function launchElectron(opts: LaunchOptions): Promise<LaunchResult>
   * `dumpOuterHTML`: `page.evaluate(() => document.documentElement.outerHTML)`.
   * `listSelectors`: evaluate in page to gather data-testid / role / text hints (same shape as before).
 * World-aware helpers: Driver exposes `evalInRendererMainWorld`, `evalInIsolatedWorld`, `evalInPreload`, `waitForBridge`, `onRendererReload`, `onPreloadReady`, and `injectGlobals` (with persistence across reloads via `addInitScript` + CDP context hooks).
-* IPC tracing: opt-in via `driver.enableIpcTracing()`; traces `ipcRenderer.send/invoke/on` with payload + duration; `driver.flushIpc()` returns buffered entries.
+* IPC tracing: opt-in via `driver.enableIpcTracing()`; traces `ipcRenderer.send/invoke/on` with payload + duration streamed directly into `run.log`.
 * Snapshots: `driver.snapshotGlobals(['foo','bar'])` returns per-world values; `driver.dumpDOM(selector?)` and `waitForTextAcrossReloads` aid flaky reload-prone UIs.
 * DevTools access: `driver.getRendererInspectorUrl()` builds a `devtools://…` URL pointing at the current renderer target.
-* Console capture: CDP `Runtime.consoleAPICalled` + `Log.entryAdded` on **all targets** (browser/main + every renderer page) with per-world tags (`main`, `preload`, `renderer`, `isolated`, `worker`). `driver.flushConsole({ sources?, sinceTs? })` returns and clears structured entries. Attach is still best-effort (events before CDP connection may be missed).
-* Network capture: `page.on('requestfailed', …)` and `page.on('response', …)` (status ≥ 400) to fill `NetworkHarvest`; requests that finish before the driver attaches will not appear.
+* Console capture: CDP `Runtime.consoleAPICalled` + `Log.entryAdded` on **all targets** (browser/main + every renderer page) with per-world tags (`main`, `preload`, `renderer`, `isolated`, `worker`); entries stream immediately into `run.log`.
+* Network capture: `page.on('requestfailed', …)` and `page.on('response', …)` (status ≥ 400) emit `network` lines into the streaming log; requests that finish before the driver attaches will not appear.
 
 ## 5) Optional test‑only IPC shims
 
@@ -286,11 +256,10 @@ export async function launchElectron(opts: LaunchOptions): Promise<LaunchResult>
 
 * Every command accepts `timeoutMs`; default 10s (launch: 40s).
 * Retries for click/type: default 0; on retry, re‑resolve locator.
-* **Artifacts** directory: configurable with `artifactDir` (default `.e2e-artifacts`) and `artifactPrefix` (default `<timestamp>`). Each run lives under `<artifactDir>/<artifactPrefix>/` plus a `last-run` symlink pointing to the most recent run _per dir_. Store:
-  * Electron stdout/stderr (`launch-electron` helper) as `electron.stdout.log` / `electron.stderr.log`
-  * `screenshot` outputs
-  * `dom-snapshot` outputs (when requested)
-  * harvested `console-harvest.json`, `network-harvest.json`
+* **Artifacts** directory: configurable with `artifactDir` (default `.e2e-artifacts`) and `artifactPrefix` (default `<timestamp>`). Each run lives under `<artifactDir>/<artifactPrefix>/` plus an unchanged `last-run` symlink pointing to the most recent run _per dir_. Store:
+  * A single streaming text log `run.log` capturing system notices, Electron stdio, console/CDP events, network hooks, IPC traces, and artifact writes.
+  * `screenshot` outputs.
+  * `dump-dom` outputs.
 * **Shutdown** policy:
   * Consumer-owned: start and stop the app in your harness. The library/CLI do not manage process lifetime unless you opt into `launchElectron` / `launch-electron quit`.
 * **Security**: CDP bound to `127.0.0.1`; enabled only when `E2E_CDP_PORT` is present; never ship enabled in production builds.
@@ -301,7 +270,7 @@ export async function launchElectron(opts: LaunchOptions): Promise<LaunchResult>
 .
 ├─ src/
 │  ├─ cli/browser-tools.ts        # dispatches subcommands
-│  ├─ cli/launch-electron.ts      # optional launch/quit helper (JSON I/O)
+│  ├─ cli/launch-electron.ts      # optional launch/quit helper (JSON input, minimal output)
 │  ├─ cli/browser-tools.spec.mjs  # drives CLI against the fixture app
 │  ├─ lib/playwright-driver.ts
 │  └─ lib/types.ts
