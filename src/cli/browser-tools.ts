@@ -1,12 +1,11 @@
 import { writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { chromium } from 'playwright'
-import { guardBrokenPipes, safeWrite } from './safe-stdio.js'
-
 import { ensureArtifactPath, prepareOrReuseArtifactRun } from '../lib/artifacts.js'
 import { buildLocator, connectAndPick } from '../lib/playwright-driver.js'
 import { openRunLogger } from '../lib/run-log.js'
 import type { ArtifactOptions, Selector } from '../lib/types.js'
+import { guardBrokenPipes, safeWrite } from './safe-stdio.js'
 
 guardBrokenPipes()
 

@@ -10,8 +10,8 @@ import {
   type Request,
   type Response,
 } from 'playwright'
-import type { AppErrorCode } from './error-codes.js'
 import { defaultArtifactDir } from './artifacts.js'
+import type { AppErrorCode } from './error-codes.js'
 import { type LogLevel, type LogSource, openRunLogger, type RunLogger } from './run-log.js'
 import type { ConnectOptions, ConsoleSource, Driver, Selector, SnapshotPerWorld } from './types.js'
 

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
-import { guardBrokenPipes, safeWrite } from './safe-stdio.js'
 import { launchElectron, terminateTree } from '../lib/launch-electron.js'
 import type { LaunchOptions } from '../lib/types.js'
+import { guardBrokenPipes, safeWrite } from './safe-stdio.js'
 
 guardBrokenPipes()
 
