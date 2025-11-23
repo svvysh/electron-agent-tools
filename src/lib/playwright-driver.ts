@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { mkdir } from 'node:fs/promises'
-import { basename, dirname } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import type { CDPSession } from 'playwright'
 import {
   type Browser,
@@ -11,6 +11,7 @@ import {
   type Response,
 } from 'playwright'
 import type { AppErrorCode } from './error-codes.js'
+import { defaultArtifactDir } from './artifacts.js'
 import { type LogLevel, type LogSource, openRunLogger, type RunLogger } from './run-log.js'
 import type { ConnectOptions, ConsoleSource, Driver, Selector, SnapshotPerWorld } from './types.js'
 
@@ -555,9 +556,8 @@ class PlaywrightDriver implements Driver {
     const browser = await chromium.connectOverCDP(opts.wsUrl)
     const contexts = browser.contexts()
     const pages = contexts.flatMap((ctx) => ctx.pages())
-    const logger = opts.runLogPath
-      ? openRunLogger(dirname(opts.runLogPath), basename(opts.runLogPath))
-      : null
+    const runLogPath = opts.runLogPath ?? join(defaultArtifactDir, 'last-run', 'run.log')
+    const logger = openRunLogger(dirname(runLogPath), basename(runLogPath))
 
     if (pages.length === 0) {
       await browser.close()
