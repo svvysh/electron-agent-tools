@@ -1,6 +1,6 @@
 {
   "name": "electron-agent-tools",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Playwright-based tools to launch and drive Electron apps (CLI + tiny TS API).",
   "type": "module",
   "license": "MIT",
