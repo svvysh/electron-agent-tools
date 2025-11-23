@@ -1,5 +1,11 @@
 # electron-agent-tools
 
+## 0.2.4
+
+### Patch Changes
+
+- a680721: Harden stdio EPIPE handling by making the guard idempotent and swallowing uncaughtException EPIPEs so downstream apps can drop their manual pipe hacks.
+
 ## 0.2.3
 
 ### Patch Changes
