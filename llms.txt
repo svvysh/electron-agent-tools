@@ -3,6 +3,25 @@
 
 Playwright-powered CLI and TypeScript helpers to launch, attach to, and drive Electron apps over CDP. Built for scripting, CI, and LLM agents with JSON-in/JSON-out commands.
 
+## TL;DR
+- Straightforward API to launch/quit the Electron app inside tests and drive the page with Playwright under the hood.
+- All logs from every environment (stdout/stderr, renderer/preload/main, IPC, network) land in one `.e2e-artifacts/<prefix>/run.log` file à la [dev3000](https://github.com/vercel-labs/dev3000).
+- Drop-in LLM context lives in `./llms.txt` so agents know how to use the tool immediately.
+
+```
+# .e2e-artifacts/last-run/run.log
+[2025-11-23T11:37:46.637Z] [system]   [info]  run-start command=pnpm args=-w run start:debug
+[2025-11-23T11:37:46.951Z] [stdout]   [info]  main-ready
+[2025-11-23T11:37:47.182Z] [stderr]   [error] DevTools listening on ws://127.0.0.1:61831/devtools/browser/…
+[2025-11-23T11:37:47.552Z] [renderer] [debug] [vite] connected url=http://localhost:5173/@vite/client
+[2025-11-23T11:37:47.552Z] [preload]  [warn]  Electron Security Warning (Insecure CSP) url=node:electron/js2c/sandbox_bundle
+[2025-11-23T11:37:47.517Z] [system]   [info]  cdp-ready wsUrl=ws://127.0.0.1:61831/devtools/browser/… pid=99426 electronPid=99445
+[2025-11-23T11:37:48.037Z] [renderer] [log]   stageSelection click {"workspace":"/tmp/…","targetPath":"hunks.txt","hasSelectedPatch":true}
+[2025-11-23T11:37:48.251Z] [ipc]      [info]  ipc-trace direction=renderer->main kind=invoke channel=eat-ping durationMs=4
+[2025-11-23T11:37:48.350Z] [network]  [warn]  response>=400 url=http://localhost:5173/node_modules/.vite/deps/react-devtools line=0
+[2025-11-23T11:37:49.257Z] [system]   [info]  run-end pid=99426 electronPid=99445
+```
+
 ## What it does
 - `browser-tools <subcmd>`: JSON-only CLI to click, type, wait, screenshot, dump DOM, and stream logs.
 - `launch-electron start|quit`: spawn an Electron app with CDP enabled and collect artifacts.

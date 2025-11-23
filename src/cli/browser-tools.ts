@@ -1,11 +1,14 @@
 import { writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { chromium } from 'playwright'
+import { guardBrokenPipes, safeWrite } from './safe-stdio.js'
 
 import { ensureArtifactPath, prepareOrReuseArtifactRun } from '../lib/artifacts.js'
 import { buildLocator, connectAndPick } from '../lib/playwright-driver.js'
 import { openRunLogger } from '../lib/run-log.js'
 import type { ArtifactOptions, Selector } from '../lib/types.js'
+
+guardBrokenPipes()
 
 type JsonInput = Record<string, unknown>
 type ParseResult =
@@ -20,7 +23,7 @@ type ParseResult =
     }
 
 const printJson = (payload: unknown) => {
-  process.stdout.write(`${JSON.stringify(payload)}\n`)
+  safeWrite(process.stdout, `${JSON.stringify(payload)}\n`)
 }
 
 const fail = (code: string, message: string, details?: Record<string, unknown>) => {

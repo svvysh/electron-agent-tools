@@ -1,6 +1,9 @@
 import { readFile } from 'node:fs/promises'
+import { guardBrokenPipes, safeWrite } from './safe-stdio.js'
 import { launchElectron, terminateTree } from '../lib/launch-electron.js'
 import type { LaunchOptions } from '../lib/types.js'
+
+guardBrokenPipes()
 
 type JsonInput = Record<string, unknown>
 type ParseResult =
@@ -15,7 +18,7 @@ type ParseResult =
     }
 
 const printJson = (payload: unknown) => {
-  process.stdout.write(`${JSON.stringify(payload)}\n`)
+  safeWrite(process.stdout, `${JSON.stringify(payload)}\n`)
 }
 
 const fail = (code: string, message: string, details?: Record<string, unknown>) => {
