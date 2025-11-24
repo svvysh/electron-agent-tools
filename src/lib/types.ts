@@ -8,7 +8,7 @@ export type ConnectOptions = {
 
 export type Selector = {
   testid?: string | undefined
-  role?: { role: string; name?: string | undefined } | undefined
+  role?: { role: Parameters<Page['getByRole']>[0]; name?: string | undefined } | undefined
   text?: string | undefined
   css?: string | undefined
   nth?: number | undefined
@@ -58,6 +58,13 @@ export type SnapshotPerWorld = {
   values: Record<string, unknown>
 }
 
+export type WaitForValueOptions = {
+  timeoutMs?: number | undefined
+  pollMs?: number | undefined
+  description?: string | undefined
+  context?: 'renderer' | 'page' | undefined
+}
+
 export interface Driver {
   /** Access to the underlying Playwright page (optional). */
   page?: Page | undefined
@@ -86,6 +93,10 @@ export interface Driver {
   onRendererReload(cb: () => void): () => void
   onPreloadReady(cb: () => void): () => void
   waitForBridge(timeoutMs?: number): Promise<void>
+  waitForValue<T>(
+    fn: () => Promise<T | null | undefined> | T | null | undefined,
+    options?: WaitForValueOptions,
+  ): Promise<NonNullable<T>>
   injectGlobals(
     globals: Record<string, unknown>,
     opts?: { persist?: boolean; worlds?: Array<'renderer' | 'isolated' | 'preload'> },

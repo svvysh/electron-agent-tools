@@ -70,6 +70,7 @@ Check `examples/` for a ready-to-run smoke test against the bundled fixture app.
 - **Unified run.log**: each run emits `[ISO] [source] [level] message` lines across stdout/stderr, console (renderer/preload/main/isolated), IPC traces, network failures, screenshots, and DOM dumps.
 - **World-aware eval**: `driver.evalInPreload`, `evalInRendererMainWorld`, `evalInIsolatedWorld` let you probe exactly where globals live.
 - **Lifecycle hooks**: `onRendererReload` / `onPreloadReady` plus `waitForBridge()` for contextIsolation + Vite reloads.
+- **Polling helper**: `waitForValue(fn, { description?, timeoutMs?, pollMs?, context? })` keeps calling a renderer/main-world function until it returns a value, capturing the last error on timeout.
 - **Deterministic injection**: `injectGlobals(obj, { persist: true })` replays helpers into renderer + preload on every navigation.
 - **State snapshots**: `snapshotGlobals(['foo','bar'])`, `dumpDOM(selector?)`, and `waitForTextAcrossReloads` help debug flaky UIs.
 - **DevTools in headless**: `getRendererInspectorUrl()` builds a `devtools://…` link for the current renderer target.

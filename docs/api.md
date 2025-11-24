@@ -58,6 +58,7 @@ import type {
 - `evalInRendererMainWorld / evalInIsolatedWorld / evalInPreload` — CDP evaluate helpers scoped to the exact JS world.
 - `onRendererReload` / `onPreloadReady` — Lifecycle hooks to re-register globals across Vite/navigations.
 - `waitForBridge(timeoutMs?)` — Polls preload for `__eatBridgeReady__`/`__eatTestHarness__`.
+- `waitForValue(fn, { timeoutMs?, pollMs?, description?, context? })` — Repeatedly evaluates `fn` (renderer main world by default, or `context: 'page'`) until it returns a non-nullish value; defaults: `timeoutMs=10_000`, `pollMs=200`; on timeout throws `E_WAIT_TIMEOUT` with the last error message recorded.
 - `injectGlobals(globals, { persist?, worlds? })` — Deterministically replays helper objects into chosen worlds after reloads.
 - `snapshotGlobals(names, { worlds? })` — Returns values per world for quick state inspection.
 - `waitForTextAcrossReloads(text, { timeoutMs?, perAttemptTimeoutMs? })` — Retry-friendly wait that tolerates renderer reloads and captures DOM on failure.

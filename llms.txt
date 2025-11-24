@@ -71,6 +71,7 @@ Check `examples/` for a ready-to-run smoke test against the bundled fixture app.
 - **Unified run.log**: each run emits `[ISO] [source] [level] message` lines across stdout/stderr, console (renderer/preload/main/isolated), IPC traces, network failures, screenshots, and DOM dumps.
 - **World-aware eval**: `driver.evalInPreload`, `evalInRendererMainWorld`, `evalInIsolatedWorld` let you probe exactly where globals live.
 - **Lifecycle hooks**: `onRendererReload` / `onPreloadReady` plus `waitForBridge()` for contextIsolation + Vite reloads.
+- **Polling helper**: `waitForValue(fn, { description?, timeoutMs?, pollMs?, context? })` keeps calling a renderer/main-world function until it returns a value, capturing the last error on timeout.
 - **Deterministic injection**: `injectGlobals(obj, { persist: true })` replays helpers into renderer + preload on every navigation.
 - **State snapshots**: `snapshotGlobals(['foo','bar'])`, `dumpDOM(selector?)`, and `waitForTextAcrossReloads` help debug flaky UIs.
 - **DevTools in headless**: `getRendererInspectorUrl()` builds a `devtools://…` link for the current renderer target.
@@ -145,6 +146,7 @@ import type {
 - `evalInRendererMainWorld / evalInIsolatedWorld / evalInPreload` — CDP evaluate helpers scoped to the exact JS world.
 - `onRendererReload` / `onPreloadReady` — Lifecycle hooks to re-register globals across Vite/navigations.
 - `waitForBridge(timeoutMs?)` — Polls preload for `__eatBridgeReady__`/`__eatTestHarness__`.
+- `waitForValue(fn, { timeoutMs?, pollMs?, description?, context? })` — Repeatedly evaluates `fn` (renderer main world by default, or `context: 'page'`) until it returns a non-nullish value; defaults: `timeoutMs=10_000`, `pollMs=200`; on timeout throws `E_WAIT_TIMEOUT` with the last error message recorded.
 - `injectGlobals(globals, { persist?, worlds? })` — Deterministically replays helper objects into chosen worlds after reloads.
 - `snapshotGlobals(names, { worlds? })` — Returns values per world for quick state inspection.
 - `waitForTextAcrossReloads(text, { timeoutMs?, perAttemptTimeoutMs? })` — Retry-friendly wait that tolerates renderer reloads and captures DOM on failure.
@@ -660,14 +662,10 @@ test('launch-electron CLI start/quit', { concurrency: false }, async () => {
 
 === src/lib/launch-electron.spec.mjs ===
 import assert from 'node:assert'
-import { execFile } from 'node:child_process'
 import { readdir } from 'node:fs/promises'
 import path from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { promisify } from 'node:util'
-
-const execFileAsync = promisify(execFile)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..', '..')
 const electronBin = (() => {
@@ -676,19 +674,6 @@ const electronBin = (() => {
   }
   return path.join(root, 'node_modules/.bin/electron')
 })()
-const pnpmBin = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
-
-let built = false
-const buildOnce = async () => {
-  if (built) return
-  await execFileAsync(pnpmBin, ['build'], {
-    cwd: root,
-    env: { ...process.env, NODE_ENV: 'test' },
-    shell: process.platform === 'win32', // Node 20+: .cmd requires shell on Windows
-  })
-  built = true
-}
-
 const loadLib = () => import(pathToFileURL(path.join(root, 'dist/index.js')).href)
 
 const countFds = async () => {
@@ -709,7 +694,6 @@ test(
   'launchElectron closes log file descriptors between runs',
   { concurrency: false },
   async () => {
-    await buildOnce()
     const { launchElectron } = await loadLib()
 
     const before = await countFds()
@@ -731,3 +715,66 @@ test(
     }
   },
 )
+
+=== src/lib/wait-for-value.spec.mjs ===
+import assert from 'node:assert'
+import path from 'node:path'
+import { test } from 'node:test'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const root = path.join(__dirname, '..', '..')
+const { AppError, PlaywrightDriver } = await import(
+  pathToFileURL(path.join(root, 'dist/lib/playwright-driver.js')).href
+)
+
+const createDriver = () => {
+  const fakeBrowser = {} // not used by waitForValue when context === 'page'
+  const fakePage = {
+    // mirrors the Playwright Page evaluate signature the helper expects
+    async evaluate(fn) {
+      return typeof fn === 'function' ? await fn() : fn
+    },
+  }
+
+  // @ts-expect-error minimal fakes: waitForValue only needs page.evaluate
+  return new PlaywrightDriver(fakeBrowser, fakePage, 'ws://dummy', null)
+}
+
+test('waitForValue resolves once fn returns non-nullish', async () => {
+  const driver = createDriver()
+  let attempts = 0
+
+  const value = await driver.waitForValue(
+    () => {
+      attempts += 1
+      return attempts >= 3 ? 'ready' : null
+    },
+    { context: 'page', pollMs: 5, timeoutMs: 200 },
+  )
+
+  assert.strictEqual(value, 'ready')
+  assert.strictEqual(attempts, 3)
+})
+
+test('waitForValue captures last error message on timeout', async () => {
+  const driver = createDriver()
+  let attempts = 0
+
+  await assert.rejects(
+    driver.waitForValue(
+      () => {
+        attempts += 1
+        throw new Error('boom')
+      },
+      { context: 'page', pollMs: 5, timeoutMs: 40, description: 'boom test' },
+    ),
+    (err) => {
+      assert.ok(err instanceof AppError)
+      assert.strictEqual(err.code, 'E_WAIT_TIMEOUT')
+      assert.strictEqual(err.details?.lastError, 'boom')
+      assert.strictEqual(err.details?.description, 'boom test')
+      assert.ok(attempts > 1, 'should retry after errors')
+      return true
+    },
+  )
+})

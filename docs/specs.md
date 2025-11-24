@@ -205,6 +205,10 @@ export interface Driver {
   onRendererReload(cb: () => void): () => void;
   onPreloadReady(cb: () => void): () => void;
   waitForBridge(timeoutMs?: number): Promise<void>;
+  waitForValue<T>(
+    fn: () => Promise<T | null | undefined> | T | null | undefined,
+    options?: { timeoutMs?: number; pollMs?: number; description?: string; context?: 'renderer' | 'page' },
+  ): Promise<NonNullable<T>>;
   injectGlobals(
     globals: Record<string, unknown>,
     opts?: { persist?: boolean; worlds?: Array<'renderer' | 'isolated' | 'preload'> },
@@ -242,7 +246,7 @@ export async function launchElectron(opts: LaunchOptions): Promise<LaunchResult>
   * `screenshot`: `page.screenshot({ path, fullPage })`.
   * `dumpOuterHTML`: `page.evaluate(() => document.documentElement.outerHTML)`.
   * `listSelectors`: evaluate in page to gather data-testid / role / text hints (same shape as before).
-* World-aware helpers: Driver exposes `evalInRendererMainWorld`, `evalInIsolatedWorld`, `evalInPreload`, `waitForBridge`, `onRendererReload`, `onPreloadReady`, and `injectGlobals` (with persistence across reloads via `addInitScript` + CDP context hooks).
+* World-aware helpers: Driver exposes `evalInRendererMainWorld`, `evalInIsolatedWorld`, `evalInPreload`, `waitForBridge`, `waitForValue`, `onRendererReload`, `onPreloadReady`, and `injectGlobals` (with persistence across reloads via `addInitScript` + CDP context hooks).
 * IPC tracing: opt-in via `driver.enableIpcTracing()`; traces `ipcRenderer.send/invoke/on` with payload + duration streamed directly into `run.log`.
 * Snapshots: `driver.snapshotGlobals(['foo','bar'])` returns per-world values; `driver.dumpDOM(selector?)` and `waitForTextAcrossReloads` aid flaky reload-prone UIs.
 * DevTools access: `driver.getRendererInspectorUrl()` builds a `devtools://…` URL pointing at the current renderer target.

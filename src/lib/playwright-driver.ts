@@ -190,7 +190,7 @@ export const buildLocator = (page: Page, sel: Selector): Locator => {
   return locator.nth(sel.nth ?? 0)
 }
 
-class PlaywrightDriver implements Driver {
+export class PlaywrightDriver implements Driver {
   #browser: Browser
   #page: Page
   #browserSession: CDPSession | null = null
@@ -883,6 +883,66 @@ class PlaywrightDriver implements Driver {
       await new Promise((resolve) => setTimeout(resolve, 200))
     }
     throw new AppError('E_WAIT_TIMEOUT', 'Bridge was not ready in time')
+  }
+
+  /**
+   * Polls the renderer (default) or page main world until `fn` returns a non-nullish value.
+   *
+   * Example:
+   * ```ts
+   * const mruPath = await driver.waitForValue(
+   *   () => window.originBridge?.onboarding.listMru()?.then((r) => r?.storePath),
+   *   { description: 'mru store path', pollMs: 200 },
+   * )
+   * ```
+   */
+  async waitForValue<T>(
+    fn: () => Promise<T | null | undefined> | T | null | undefined,
+    options?: {
+      timeoutMs?: number
+      pollMs?: number
+      description?: string
+      context?: 'renderer' | 'page'
+    },
+  ): Promise<NonNullable<T>> {
+    const timeoutMs = options?.timeoutMs ?? 10_000
+    const pollMs = options?.pollMs ?? 200
+    const description = options?.description ? `: ${options.description}` : ''
+    const start = Date.now()
+    let lastError: string | undefined
+
+    const evaluateOnce = async () => {
+      if (!this.#page) {
+        throw new AppError('E_NO_PAGE', 'No renderer page is attached for waitForValue')
+      }
+
+      if (options?.context === 'page') {
+        return this.#page.evaluate(fn)
+      }
+
+      return this.evalInRendererMainWorld(fn)
+    }
+
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const value = await evaluateOnce()
+        if (value !== null && value !== undefined) {
+          return value as NonNullable<T>
+        }
+      } catch (error) {
+        lastError = (error as Error)?.message ?? String(error)
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, pollMs))
+    }
+
+    throw new AppError('E_WAIT_TIMEOUT', `Timed out waiting for value${description}`, {
+      timeoutMs,
+      pollMs,
+      description: options?.description,
+      context: options?.context ?? 'renderer',
+      lastError,
+    })
   }
 
   async injectGlobals(

@@ -1,12 +1,8 @@
 import assert from 'node:assert'
-import { execFile } from 'node:child_process'
 import { readdir } from 'node:fs/promises'
 import path from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { promisify } from 'node:util'
-
-const execFileAsync = promisify(execFile)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..', '..')
 const electronBin = (() => {
@@ -15,19 +11,6 @@ const electronBin = (() => {
   }
   return path.join(root, 'node_modules/.bin/electron')
 })()
-const pnpmBin = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
-
-let built = false
-const buildOnce = async () => {
-  if (built) return
-  await execFileAsync(pnpmBin, ['build'], {
-    cwd: root,
-    env: { ...process.env, NODE_ENV: 'test' },
-    shell: process.platform === 'win32', // Node 20+: .cmd requires shell on Windows
-  })
-  built = true
-}
-
 const loadLib = () => import(pathToFileURL(path.join(root, 'dist/index.js')).href)
 
 const countFds = async () => {
@@ -48,7 +31,6 @@ test(
   'launchElectron closes log file descriptors between runs',
   { concurrency: false },
   async () => {
-    await buildOnce()
     const { launchElectron } = await loadLib()
 
     const before = await countFds()
